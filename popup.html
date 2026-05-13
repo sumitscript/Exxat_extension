@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Exxat One Downloader</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      width: 100%;
+      min-width: 280px;
+      background: #fff;
+      color: #1a1a1a;
+    }
+
+    header {
+      background: #1a56db;
+      color: #fff;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    header h1 { font-size: 14px; font-weight: 600; }
+
+    #mode-badge {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.25);
+      letter-spacing: 0.5px;
+    }
+
+    main { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+
+    /* ---- Interruption warning ---- */
+    #interruption-warning {
+      display: none;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #856404;
+    }
+
+    #interruption-warning.visible { display: block; }
+
+    /* ---- Storage error ---- */
+    #storage-error {
+      display: none;
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #991b1b;
+    }
+
+    #storage-error.visible { display: block; }
+
+    /* ---- Step count ---- */
+    #step-count-row {
+      font-size: 12px;
+      color: #555;
+    }
+
+    #step-count-row span { font-weight: 600; color: #1a1a1a; }
+
+    /* ---- Controls ---- */
+    .btn-group { display: flex; flex-direction: column; gap: 6px; }
+
+    button {
+      width: 100%;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary   { background: #1a56db; color: #fff; }
+    .btn-danger    { background: #e02424; color: #fff; }
+    .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+    .btn-success   { background: #057a55; color: #fff; }
+
+    /* ---- Progress ---- */
+    #progress-section {
+      display: none;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    #progress-section.visible { display: block; }
+
+    #progress-section h2 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+    }
+
+    .progress-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .progress-cell {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 5px;
+      padding: 6px 8px;
+      text-align: center;
+    }
+
+    .progress-cell .val {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .progress-cell .lbl {
+      font-size: 10px;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .val-processed { color: #057a55; }
+    .val-skipped   { color: #d97706; }
+    .val-failed    { color: #e02424; }
+    .val-total     { color: #1a56db; }
+
+    /* ---- Summary ---- */
+    #summary-section {
+      display: none;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    #summary-section.visible { display: block; }
+
+    #summary-section h2 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #065f46;
+      margin-bottom: 6px;
+    }
+
+    #summary-stats { font-size: 12px; color: #374151; margin-bottom: 6px; }
+
+    #failed-list-wrapper { display: none; }
+    #failed-list-wrapper.visible { display: block; }
+
+    #failed-list-wrapper p {
+      font-size: 11px;
+      font-weight: 600;
+      color: #e02424;
+      margin-bottom: 4px;
+    }
+
+    #failed-list {
+      max-height: 80px;
+      overflow-y: auto;
+      font-size: 11px;
+      color: #374151;
+      background: #fff;
+      border: 1px solid #fca5a5;
+      border-radius: 4px;
+      padding: 4px 6px;
+    }
+
+    #failed-list li { list-style: none; padding: 1px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Exxat One Downloader</h1>
+    <span style="font-size:10px;opacity:0.7;margin-left:4px">v2.3</span>
+    <span id="mode-badge">IDLE</span>
+  </header>
+
+  <main>
+    <!-- Interruption warning (Requirement 6.4) -->
+    <div id="interruption-warning" role="alert">
+      ⚠️ Session interrupted — the tab was closed or navigated away from Exxat One.
+    </div>
+
+    <!-- Storage error (Requirement 1.3) -->
+    <div id="storage-error" role="alert"></div>
+
+    <!-- Recorded step count (Requirement 1.4) -->
+    <div id="step-count-row">
+      Recorded steps: <span id="step-count">0</span>
+    </div>
+
+    <!-- Mode-appropriate controls (Requirements 1.4, 6.1) -->
+    <div class="btn-group" id="controls">
+      <button id="btn-start-record"  class="btn-primary">Start Recording</button>
+      <button id="btn-stop-record"   class="btn-danger"  style="display:none">Stop Recording</button>
+      <button id="btn-start-replay"  class="btn-success">Start Replay</button>
+      <button id="btn-stop-replay"   class="btn-danger"  style="display:none">Stop Replay</button>
+      <button id="btn-clear"         class="btn-secondary">Clear Steps</button>
+      <button id="btn-export"        class="btn-secondary">Export Log</button>
+    </div>
+
+    <!-- Live progress (Requirement 6.1) -->
+    <div id="progress-section" aria-live="polite">
+      <h2>Live Progress</h2>
+      <div class="progress-grid">
+        <div class="progress-cell">
+          <div class="val val-processed" id="prog-processed">0</div>
+          <div class="lbl">Processed</div>
+        </div>
+        <div class="progress-cell">
+          <div class="val val-skipped" id="prog-skipped">0</div>
+          <div class="lbl">Skipped</div>
+        </div>
+        <div class="progress-cell">
+          <div class="val val-failed" id="prog-failed">0</div>
+          <div class="lbl">Failed</div>
+        </div>
+        <div class="progress-cell">
+          <div class="val val-total" id="prog-total">0</div>
+          <div class="lbl">Total</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session summary (Requirement 6.2) -->
+    <div id="summary-section" aria-live="polite">
+      <h2>Session Complete</h2>
+      <div id="summary-stats"></div>
+      <div id="failed-list-wrapper">
+        <p>Failed rows:</p>
+        <ul id="failed-list"></ul>
+      </div>
+    </div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

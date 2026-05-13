@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Exxat One Downloader",
+  "version": "2.3.0",
+  "description": "Automates document downloads on the Exxat One learning platform.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "downloads",
+    "tabs",
+    "webNavigation",
+    "alarms",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Exxat One Downloader"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  }
+}

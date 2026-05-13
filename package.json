@@ -1,0 +1,20 @@
+{
+  "name": "exxat_extension",
+  "version": "1.0.0",
+  "description": "",
+  "main": "background.js",
+  "scripts": {
+    "test": "jest --testEnvironment jsdom --run"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "testMatch": ["**/*.test.js"]
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "jest-environment-jsdom": "^30.4.1"
+  }
+}
