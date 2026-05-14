@@ -423,6 +423,90 @@ async function executeStep(step) {
 }
 
 // ---------------------------------------------------------------------------
+// Task 8.1 — detectRepeatingBlock(steps)
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-detects which steps form the "repeating download loop" by finding
+ * the first selector that appears more than once in the recorded sequence.
+ *
+ * Your recording might look like:
+ *   [0] click row          ← pre-loop (runs once)
+ *   [1] click Download     ← loop start (same selector repeats)
+ *   [2] click Next-doc     ← loop (same block)
+ *   [1] click Download     ← second occurrence → marks loop boundary
+ *   [2] click Next-doc
+ *   [3] click Back         ← post-loop (runs once)
+ *
+ * Algorithm:
+ *  1. Find the first selector that appears more than once → that's the
+ *     loop-start index.
+ *  2. The loop block is the slice from loop-start up to (but not including)
+ *     the second occurrence of that same selector.
+ *  3. Everything before loop-start is pre-steps; everything from the second
+ *     occurrence onward is post-steps.
+ *
+ * If no selector repeats, the entire sequence is treated as pre-steps
+ * (runs once per row, no loop).
+ *
+ * @param {Array<object>} steps
+ * @returns {{ preSteps: object[], loopSteps: object[], postSteps: object[] }}
+ */
+function detectRepeatingBlock(steps) {
+  if (!steps || steps.length === 0) {
+    return { preSteps: [], loopSteps: [], postSteps: [] };
+  }
+
+  // If any step already has isRepeating set (manual override), use that.
+  const hasManualMarkers = steps.some((s) => s.isRepeating);
+  if (hasManualMarkers) {
+    const firstRepeatingIdx = steps.findIndex((s) => s.isRepeating);
+    const lastRepeatingIdx = steps.reduce((last, s, i) => (s.isRepeating ? i : last), -1);
+    return {
+      preSteps: steps.slice(0, firstRepeatingIdx),
+      loopSteps: steps.slice(firstRepeatingIdx, lastRepeatingIdx + 1),
+      postSteps: steps.slice(lastRepeatingIdx + 1),
+    };
+  }
+
+  // Auto-detect: find the first selector that appears more than once.
+  // Only consider click steps for loop detection (scrolls are usually unique).
+  const clickSteps = steps.map((s, i) => ({ ...s, _origIdx: i })).filter((s) => s.type === "click");
+
+  let loopStartOrigIdx = -1;
+  let loopBlockLength = 0;
+
+  for (let i = 0; i < clickSteps.length; i++) {
+    const sel = clickSteps[i].selector;
+    // Find the next occurrence of this same selector
+    const nextOccurrence = clickSteps.findIndex((s, j) => j > i && s.selector === sel);
+    if (nextOccurrence !== -1) {
+      // The loop block is the steps between the first and second occurrence (inclusive of first)
+      loopStartOrigIdx = clickSteps[i]._origIdx;
+      loopBlockLength = clickSteps[nextOccurrence]._origIdx - loopStartOrigIdx;
+      break;
+    }
+  }
+
+  if (loopStartOrigIdx === -1 || loopBlockLength <= 0) {
+    // No repeating pattern found — run everything once
+    console.log("[Exxat:REPLAY] No repeating block detected — running all steps once per row");
+    return { preSteps: steps, loopSteps: [], postSteps: [] };
+  }
+
+  const preSteps = steps.slice(0, loopStartOrigIdx);
+  const loopSteps = steps.slice(loopStartOrigIdx, loopStartOrigIdx + loopBlockLength);
+  const postSteps = steps.slice(loopStartOrigIdx + loopBlockLength);
+
+  console.log(
+    `[Exxat:REPLAY] Auto-detected loop: pre=${preSteps.length} loop=${loopSteps.length} post=${postSteps.length}`,
+    "\n  Loop steps:", loopSteps.map((s) => `${s.type}:${s.selector}`)
+  );
+
+  return { preSteps, loopSteps, postSteps };
+}
+
+// ---------------------------------------------------------------------------
 // Task 8.1 — replayForRow(row, steps) (Requirements 2.1, 2.3, 2.4, 2.5, 5.1, 5.2, 5.3)
 // ---------------------------------------------------------------------------
 
@@ -431,17 +515,15 @@ async function executeStep(step) {
  *
  * Behaviour:
  *  - Skips the row immediately if its Onboarding Status is "Not Started".
- *  - Executes non-repeating steps in order.
- *  - For the repeating-step block (steps with isRepeating === true), loops
- *    until `waitForElement` fails to find a new element — indicating the
- *    document set for this student is exhausted (Req 5.1, 5.2).
- *  - If any non-repeating step fails (element not found within timeout),
- *    the row is marked as failed and step execution stops (Req 2.4).
- *  - Returns "success", "skip", or "fail" together with an optional reason
- *    string (Req 2.5, 5.3).
+ *  - Auto-detects the repeating download loop from duplicate selectors in
+ *    the recording (no manual marking needed).
+ *  - Runs pre-loop steps once, then loops the loop-block until the first
+ *    element in the loop can no longer be found (documents exhausted).
+ *  - Runs post-loop steps once.
+ *  - If any non-loop step fails, the row is marked failed.
  *
  * @param {Element} row - The <tr> element for this student.
- * @param {Array<import('./selector.js').Step>} steps - The recorded step sequence.
+ * @param {Array<object>} steps - The recorded step sequence.
  * @returns {Promise<{ result: "success" | "skip" | "fail", reason?: string }>}
  */
 async function replayForRow(row, steps) {
@@ -458,81 +540,63 @@ async function replayForRow(row, steps) {
     return { result: "success" };
   }
 
-  // Partition steps into: pre-repeating, repeating block, post-repeating.
-  // The repeating block is a contiguous run of steps where isRepeating === true.
-  const firstRepeatingIdx = steps.findIndex((s) => s.isRepeating);
-  const lastRepeatingIdx = steps.reduce(
-    (last, s, i) => (s.isRepeating ? i : last),
-    -1
-  );
+  const { preSteps, loopSteps, postSteps } = detectRepeatingBlock(steps);
 
-  const preSteps =
-    firstRepeatingIdx === -1 ? steps : steps.slice(0, firstRepeatingIdx);
-  const repeatingSteps =
-    firstRepeatingIdx === -1
-      ? []
-      : steps.slice(firstRepeatingIdx, lastRepeatingIdx + 1);
-  const postSteps =
-    firstRepeatingIdx === -1 ? [] : steps.slice(lastRepeatingIdx + 1);
-
-  // --- Execute pre-repeating steps ---
+  // --- Execute pre-loop steps (run once) ---
   for (const step of preSteps) {
     try {
       await executeStep(step);
     } catch (err) {
       return {
         result: "fail",
-        reason: `Step failed (selector: "${step.selector}"): ${err.message}`,
+        reason: `Pre-loop step failed (selector: "${step.selector}"): ${err.message}`,
       };
     }
   }
 
-  // --- Execute repeating download loop (Req 5.1, 5.2) ---
-  if (repeatingSteps.length > 0) {
-    let documentsFound = 0;
+  // --- Execute repeating download loop ---
+  if (loopSteps.length > 0) {
+    const loopTriggerSelector = loopSteps[0].selector;
+    let iteration = 0;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      // Check whether the first repeating step's target element is still present.
-      // If it is not found, the document set is exhausted — exit the loop.
-      const firstRepeatingStep = repeatingSteps[0];
+      // Probe: is the loop-trigger element still present?
+      // Use a short timeout (1.5s) so we don't stall when docs are exhausted.
       let elementPresent = false;
       try {
-        // Use a short timeout for the loop-termination probe (1 s) so we don't
-        // stall the session when there are no more documents.
-        await waitForElement(firstRepeatingStep.selector, 1000);
+        await waitForElement(loopTriggerSelector, 1500);
         elementPresent = true;
       } catch (_) {
         elementPresent = false;
       }
 
       if (!elementPresent) {
-        // No new downloadable element found — document set complete (Req 5.2)
+        console.log(`[Exxat:REPLAY]   🔁 Loop ended after ${iteration} iteration(s) — no more documents`);
         break;
       }
 
-      // Execute all steps in the repeating block for this document
-      for (const step of repeatingSteps) {
+      console.log(`[Exxat:REPLAY]   🔁 Loop iteration ${iteration + 1}`);
+      let loopBroke = false;
+      for (const step of loopSteps) {
         try {
           await executeStep(step);
-        } catch (err) {
-          // A failure mid-loop is treated as the loop being exhausted rather
-          // than a hard row failure, since the element may have disappeared
-          // after the probe succeeded (race condition).
-          elementPresent = false;
+        } catch (_) {
+          // Element disappeared mid-loop — treat as loop exhausted
+          loopBroke = true;
           break;
         }
       }
 
-      if (!elementPresent) break;
-      documentsFound++;
+      if (loopBroke) {
+        console.log(`[Exxat:REPLAY]   🔁 Loop broke mid-iteration — treating as exhausted`);
+        break;
+      }
+      iteration++;
     }
-
-    // Req 5.3: if eligible but zero documents, we still continue (warning is
-    // logged by the caller / runReplaySession, not here).
   }
 
-  // --- Execute post-repeating steps ---
+  // --- Execute post-loop steps (run once) ---
   for (const step of postSteps) {
     try {
       await executeStep(step);

@@ -443,18 +443,6 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
   }
 });
 
-if (chrome.webNavigation) {
-  chrome.webNavigation.onBeforeNavigate.addListener((details) => {
-    // Only care about top-level frame navigations during replay
-    if (details.frameId !== 0) return;
-    if (details.tabId !== activeTabId) return;
-    if (state.mode !== "REPLAYING") return;
-
-    // If navigating away mid-replay (e.g. tab redirected externally), pause session
-    chrome.tabs.sendMessage(details.tabId, { action: "STOP_REPLAY" }).catch(() => {});
-    state.mode = "IDLE";
-    state.interrupted = true;
-    activeTabId = null;
-    broadcastStatus();
-  });
-}
+// Navigation within the same tab during replay is expected (e.g. opening a
+// student detail page). We only interrupt if the tab is closed entirely,
+// which is handled by chrome.tabs.onRemoved above.

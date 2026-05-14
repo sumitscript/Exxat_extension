@@ -4,7 +4,7 @@
   "description": "",
   "main": "background.js",
   "scripts": {
-    "test": "jest --testEnvironment jsdom --run"
+    "test": "jest --testEnvironment jsdom --forceExit"
   },
   "jest": {
     "testEnvironment": "jsdom",
