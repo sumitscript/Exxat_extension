@@ -393,14 +393,21 @@ function clickRowToOpenDetail(row) {
 async function downloadAllDocumentsOnDetailPage() {
   console.log("[Exxat:DETAIL] Starting on", window.location.href);
 
-  // Wait for requirement rows — confirmed selector from logs: div.mb-2.flex
+  // Wait for requirement rows to render — wait until count stabilizes
   try {
     await waitForElement("div.mb-2.flex", 8000);
   } catch (_) {
-    console.warn("[Exxat:DETAIL] div.mb-2.flex not found, trying span.text-sm.text-gray-900");
-    try { await waitForElement("span.text-sm.text-gray-900", 5000); } catch (_2) {}
+    console.warn("[Exxat:DETAIL] div.mb-2.flex not found after 8s");
   }
-  await sleep(500);
+
+  // Wait for React to finish rendering all rows (count should stabilize)
+  let prevCount = 0;
+  for (let i = 0; i < 5; i++) {
+    await sleep(600);
+    const count = document.querySelectorAll("div.mb-2.flex").length;
+    if (count > 0 && count === prevCount) break; // stable
+    prevCount = count;
+  }
 
   const requirementRows = getRequirementItems();
   console.log(`[Exxat:DETAIL] Found ${requirementRows.length} requirement rows`);
@@ -411,41 +418,37 @@ async function downloadAllDocumentsOnDetailPage() {
     if (stopReplayRequested) break;
 
     const row = requirementRows[i];
-    const nameEl = row.querySelector("span.text-sm.text-gray-900, span[class*='text-sm']");
+    const nameEl = row.querySelector("span.text-sm.text-gray-900, span[class*='text-sm'][class*='text-gray']");
     const name = nameEl ? nameEl.textContent.trim() : `Requirement ${i + 1}`;
-    console.log(`[Exxat:DETAIL] Req ${i + 1}/${requirementRows.length}: "${name}"`);
 
-    // Primary: the download arrow button is button.px-3.min-w-[32px] inside this row
-    // CSS.escape needed for the bracket characters in the class name
-    const downloadBtn = row.querySelector("button.px-3") ||
-      row.querySelector("button[class*='min-w']") ||
-      row.querySelector("button[class*='px-3']");
+    // Find the download button: button.px-3.min-w-[32px] inside this row
+    // This is the left-side ↓ icon button confirmed from recording logs.
+    // It is DISABLED (greyed out) when no file is available — skip those.
+    const btn = row.querySelector("button.px-3") ||
+                row.querySelector("button[class*='px-3']");
 
-    if (downloadBtn) {
-      const style = window.getComputedStyle(downloadBtn);
-      if (style.display !== "none" && style.visibility !== "hidden") {
-        console.log(`[Exxat:DETAIL]   ⬇ Clicking download button for "${name}"`);
-        downloadBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-        downloaded++;
-        await sleep(1000);
-        continue;
-      }
+    if (!btn) {
+      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — no button found, skipping`);
+      continue;
     }
 
-    // Fallback: click the row to open right panel, then find Download button
-    console.log(`[Exxat:DETAIL]   Opening right panel for "${name}"`);
-    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await sleep(800);
+    // Check if disabled — greyed out means no file available
+    const isDisabled = btn.disabled ||
+      btn.getAttribute("disabled") !== null ||
+      btn.getAttribute("aria-disabled") === "true" ||
+      btn.classList.contains("disabled") ||
+      window.getComputedStyle(btn).opacity < 0.5 ||
+      window.getComputedStyle(btn).pointerEvents === "none";
 
-    const rightBtn = await findDownloadButton();
-    if (rightBtn) {
-      console.log(`[Exxat:DETAIL]   ⬇ Right-panel Download for "${name}"`);
-      rightBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      downloaded++;
-      await sleep(1000);
-    } else {
-      console.log(`[Exxat:DETAIL]   ℹ No download for "${name}"`);
+    if (isDisabled) {
+      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — button disabled (no file), skipping`);
+      continue;
     }
+
+    console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — clicking download ↓`);
+    btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    downloaded++;
+    await sleep(1200); // wait for download to initiate
   }
 
   console.log(`[Exxat:DETAIL] Done — ${downloaded}/${requirementRows.length} downloaded`);
@@ -464,41 +467,43 @@ async function downloadAllDocumentsOnDetailPage() {
  * @returns {Element[]}
  */
 function getRequirementItems() {
-  // Primary selector confirmed from recording logs:
-  // Each requirement row is div.mb-2.flex (Tailwind: margin-bottom-2 + flex)
-  const primary = Array.from(document.querySelectorAll("div.mb-2.flex")).filter((el) => {
+  // Confirmed from recording logs: each requirement row is div.mb-2.flex
+  // (Tailwind classes mb-2 + flex). The recording showed:
+  //   div.mb-2.flex:nth-of-type(1) > div.flex.flex-col:nth-of-type(2) > button.px-3.min-w-[32px]
+  // meaning the container IS div.mb-2.flex.
+
+  const rows = Array.from(document.querySelectorAll("div.mb-2.flex")).filter((el) => {
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden") return false;
-    // Must contain a span with text (the requirement name)
-    const span = el.querySelector("span");
-    return span && (span.textContent || "").trim().length > 3;
+    // Must contain a button (the download icon) — this distinguishes requirement
+    // rows from other div.mb-2.flex elements on the page
+    const btn = el.querySelector("button");
+    if (!btn) return false;
+    // Must contain some text (the requirement name)
+    const text = (el.textContent || "").trim();
+    return text.length > 3;
   });
 
-  if (primary.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${primary.length} requirement rows (div.mb-2.flex)`);
-    return primary;
+  if (rows.length > 0) {
+    console.log(`[Exxat:DETAIL] Found ${rows.length} requirement rows (div.mb-2.flex)`);
+    return rows;
   }
 
-  // Fallback: find by status text
-  const statusTexts = ["get started", "pending review", "compliant", "not started", "action needed"];
-  const byStatus = Array.from(document.querySelectorAll("div, li")).filter((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    const text = (el.textContent || "").trim().toLowerCase();
-    if (text.length > 400) return false;
-    return statusTexts.some((s) => text.includes(s));
-  });
+  // Fallback: find by the button selector pattern from the recording
+  // button.px-3.min-w-[32px] is unique to requirement rows
+  const byButton = Array.from(document.querySelectorAll("button.px-3")).map((btn) => {
+    // Walk up to find the containing requirement row
+    return btn.closest("div.mb-2") || btn.closest("div[class*='mb-2']") || btn.parentElement?.parentElement;
+  }).filter((el) => el && (el.textContent || "").trim().length > 3);
 
-  const deduped = byStatus.filter((el) =>
-    !byStatus.some((other) => other !== el && other.contains(el))
-  );
-
-  if (deduped.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${deduped.length} requirement rows (status text fallback)`);
-    return deduped;
+  // Deduplicate
+  const unique = [...new Set(byButton)];
+  if (unique.length > 0) {
+    console.log(`[Exxat:DETAIL] Found ${unique.length} requirement rows (button.px-3 fallback)`);
+    return unique;
   }
 
-  console.warn("[Exxat:DETAIL] No requirement rows found");
+  console.warn("[Exxat:DETAIL] No requirement rows found — page may not have loaded yet");
   return [];
 }
 
@@ -777,13 +782,12 @@ async function runReplaySession(steps) {
 async function replayRowBuiltIn(row, listPageUrl) {
   const currentUrl = window.location.href;
 
-  // Click to open the student detail page
   const clicked = clickRowToOpenDetail(row);
   if (!clicked) {
     return { success: false, reason: "Could not find a link to open the student detail page" };
   }
 
-  // Wait for navigation to the detail page (/assignments/{id})
+  // Wait for navigation to the detail page
   try {
     await waitForNavigation(currentUrl, 10000);
     console.log("[Exxat:REPLAY] Navigated to:", window.location.href);
@@ -791,16 +795,15 @@ async function replayRowBuiltIn(row, listPageUrl) {
     return { success: false, reason: "Navigation to detail page timed out" };
   }
 
-  // Wait for the page to settle
-  await sleep(1500);
+  // Wait for the page to fully load (React data fetch completes)
+  // The app logs show: [OnboardingContainer] runFetch COMMIT — we wait for that
+  // by waiting for the requirement rows to appear
+  await sleep(1000);
 
-  // Make sure we're on the Onboarding tab
-  await ensureOnboardingTab();
-
-  // Download all documents
+  // Download all documents using the left-side ↓ buttons
   const { downloaded, total } = await downloadAllDocumentsOnDetailPage();
 
-  // Navigate back to the list page
+  // Navigate back using the breadcrumb
   await navigateBackToList(listPageUrl);
 
   return { success: true, downloaded };
@@ -839,49 +842,35 @@ async function ensureOnboardingTab() {
 async function navigateBackToList(listPageUrl) {
   console.log("[Exxat:REPLAY] Navigating back to list page");
 
-  // Strategy 1: find the breadcrumb link by text "Schedules and onboarding"
-  const allLinks = Array.from(document.querySelectorAll("a, [role='link']"));
-  const breadcrumb = allLinks.find((el) => {
-    const text = (el.textContent || "").trim().toLowerCase();
-    return text.includes("schedules and onboarding") || text === "schedules";
-  });
+  // Confirmed from recording: breadcrumb is a.link-text with text "Schedules and onboarding"
+  const breadcrumb = Array.from(document.querySelectorAll("a.link-text, a[class*='link-text']"))
+    .find((el) => (el.textContent || "").trim().toLowerCase().includes("schedules and onboarding"));
 
   if (breadcrumb) {
     console.log("[Exxat:REPLAY] Clicking breadcrumb:", breadcrumb.textContent.trim());
+    const beforeUrl = window.location.href;
     breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await sleep(2000);
     try {
+      await waitForNavigation(beforeUrl, 8000);
       await waitForElement("table tbody tr", 8000);
       console.log("[Exxat:REPLAY] Back on list page ✅");
       return;
-    } catch (_) {}
+    } catch (_) {
+      console.warn("[Exxat:REPLAY] Breadcrumb navigation did not complete cleanly");
+    }
   }
 
-  // Strategy 2: look for any link with class "link-text" that goes to /assignments/list
-  const listLink = allLinks.find((el) => {
-    const href = el.getAttribute("href") || "";
-    return href.includes("/assignments/list") || href.includes("/assignments");
-  });
-
-  if (listLink) {
-    console.log("[Exxat:REPLAY] Clicking list link:", listLink.getAttribute("href"));
-    listLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await sleep(2000);
-    try {
-      await waitForElement("table tbody tr", 8000);
-      return;
-    } catch (_) {}
-  }
-
-  // Strategy 3: browser back
+  // Fallback: history.back()
   console.log("[Exxat:REPLAY] Using history.back()");
+  const beforeUrl2 = window.location.href;
   window.history.back();
-  await sleep(2500);
   try {
+    await waitForNavigation(beforeUrl2, 8000);
     await waitForElement("table tbody tr", 8000);
     console.log("[Exxat:REPLAY] Back on list page via history.back() ✅");
   } catch (_) {
-    console.warn("[Exxat:REPLAY] Table did not appear after back navigation");
+    console.warn("[Exxat:REPLAY] Could not confirm return to list page");
+    await sleep(2000);
   }
 }
 
