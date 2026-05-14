@@ -228,6 +228,7 @@ const ONBOARDING_STATUS_HEADER = "onboarding status";
 
 /**
  * Known statuses to skip — "Not Applicable" is also not actionable.
+ * "Some Action Needed" and "Action Needed" are both eligible.
  */
 const SKIP_STATUSES = ["not started", "not applicable"];
 
@@ -253,7 +254,10 @@ function getOnboardingStatus(row) {
   }
 
   // Fallback: scan cells for known status text
-  const knownStatuses = ["not started", "not applicable", "some action needed", "action needed", "compliant confirmed"];
+  const knownStatuses = [
+    "not started", "not applicable",
+    "some action needed", "action needed", "compliant confirmed"
+  ];
   const cells = Array.from(row.querySelectorAll("td, th"));
   for (const cell of cells) {
     const text = cell.textContent.trim();
@@ -326,70 +330,50 @@ function extractStudentId(row) {
 // ---------------------------------------------------------------------------
 
 /**
- * Finds and clicks the eye/view icon on a list-page row to open the student
- * detail page. The eye icon is in the ACTIONS column.
- *
- * Exxat renders it as an SVG icon button — we look for a button/anchor in
- * the row that is NOT the edit (pencil) or message (chat) icon.
- * The eye icon typically has aria-label containing "view" or is the first
- * icon button in the actions cell.
+ * From the logs: clicking the status cell link (a.flex.gap-2 or the row's
+ * detail link) navigates to /assignments/{id}?tab=caas.
+ * The selector from the recording was:
+ *   tr.group.duration-150:nth-of-type(2) > td... > div.min-w-0.py-3
+ * but that's row-specific. We find the link dynamically per row.
  *
  * @param {Element} row
- * @returns {boolean} true if the eye icon was found and clicked
+ * @returns {boolean}
  */
-function clickEyeIcon(row) {
-  // Strategy 1: aria-label containing "view" or "eye"
-  const byAriaLabel = row.querySelector(
-    '[aria-label*="view" i], [aria-label*="eye" i], [aria-label*="detail" i], [title*="view" i]'
-  );
-  if (byAriaLabel) {
-    console.log("[Exxat:NAV] Clicking eye icon (aria-label):", byAriaLabel);
-    byAriaLabel.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    return true;
-  }
-
-  // Strategy 2: look for the SVG eye icon — Exxat uses MUI icons.
-  // The eye icon SVG path starts with "M12 4.5C7 4.5..." (MUI Visibility icon)
-  // We look for a button containing an SVG in the last cell (ACTIONS column)
-  const cells = Array.from(row.querySelectorAll("td"));
-  const actionsCell = cells[cells.length - 1];
-  if (actionsCell) {
-    // The eye icon button is typically the SECOND button in the actions cell
-    // (after the edit pencil icon). But it can vary — find the one that is
-    // NOT a pencil (edit) and NOT a chat/message icon.
-    const buttons = Array.from(actionsCell.querySelectorAll('button, [role="button"]'));
-    // Filter out buttons that contain text like "Edit" or "Message"
-    const iconButtons = buttons.filter((btn) => {
-      const text = btn.textContent.trim().toLowerCase();
-      return text === "" || text.length < 5; // icon-only buttons have no text
-    });
-
-    // The eye icon is typically the first icon button in the actions cell
-    // that is NOT the edit button. On Exxat, the order is: edit(pencil), eye, chat
-    // Based on screenshots: eye icon is the SECOND icon button
-    if (iconButtons.length >= 2) {
-      console.log("[Exxat:NAV] Clicking eye icon (2nd icon button in actions cell)");
-      iconButtons[1].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      return true;
-    }
-    if (iconButtons.length === 1) {
-      console.log("[Exxat:NAV] Clicking only icon button in actions cell");
-      iconButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      return true;
-    }
-  }
-
-  // Strategy 3: any link in the row that goes to /assignments/{id}
+function clickRowToOpenDetail(row) {
+  // Strategy 1: any <a> inside the row that links to /assignments/{id}
   const links = Array.from(row.querySelectorAll("a[href]"));
-  const detailLink = links.find((a) => /\/assignments\/[a-f0-9]+/.test(a.getAttribute("href") || ""));
+  const detailLink = links.find((a) => {
+    const href = a.getAttribute("href") || "";
+    return /\/assignments\/[a-f0-9]{24}/.test(href);
+  });
   if (detailLink) {
-    console.log("[Exxat:NAV] Clicking detail link:", detailLink.href);
+    console.log("[Exxat:NAV] Clicking detail link:", detailLink.getAttribute("href"));
     detailLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
   }
 
-  console.warn("[Exxat:NAV] Could not find eye icon in row");
-  return false;
+  // Strategy 2: the status/name cell — from logs it's a div or anchor in the row
+  // The onboarding status cell is the last meaningful cell; the student name cell
+  // is earlier. Click the student name/details cell which is a link.
+  const statusLink = row.querySelector("a.flex, a[class*='flex']");
+  if (statusLink) {
+    console.log("[Exxat:NAV] Clicking flex link:", statusLink.textContent.trim().slice(0, 50));
+    statusLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return true;
+  }
+
+  // Strategy 3: click the onboarding status cell div (from logs: div.min-w-0.py-3)
+  const statusCell = row.querySelector("div.min-w-0.py-3, td div[class*='py-3']");
+  if (statusCell) {
+    console.log("[Exxat:NAV] Clicking status cell div");
+    statusCell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return true;
+  }
+
+  // Strategy 4: click the row itself
+  console.log("[Exxat:NAV] Clicking row directly");
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -407,183 +391,147 @@ function clickEyeIcon(row) {
  * @returns {Promise<{ downloaded: number, total: number }>}
  */
 async function downloadAllDocumentsOnDetailPage() {
-  console.log("[Exxat:DETAIL] Starting document download pass on", window.location.href);
+  console.log("[Exxat:DETAIL] Starting on", window.location.href);
 
-  // Wait for the requirements list to render
-  // The left panel items are list items — wait for at least one to appear
-  let requirementItems = [];
+  // Wait for requirement rows — confirmed selector from logs: div.mb-2.flex
   try {
-    await waitForElement('[class*="requirement"], [class*="Requirement"], .onboarding-item, li', 8000);
+    await waitForElement("div.mb-2.flex", 8000);
   } catch (_) {
-    console.warn("[Exxat:DETAIL] Requirements list did not appear");
+    console.warn("[Exxat:DETAIL] div.mb-2.flex not found, trying span.text-sm.text-gray-900");
+    try { await waitForElement("span.text-sm.text-gray-900", 5000); } catch (_2) {}
   }
+  await sleep(500);
 
-  // Find all clickable requirement items in the left panel.
-  // They are list items or divs that contain the requirement name text.
-  // We use multiple strategies since the class names are dynamic (MUI).
-  requirementItems = getRequirementItems();
-  console.log(`[Exxat:DETAIL] Found ${requirementItems.length} requirement items`);
+  const requirementRows = getRequirementItems();
+  console.log(`[Exxat:DETAIL] Found ${requirementRows.length} requirement rows`);
 
   let downloaded = 0;
 
-  for (let i = 0; i < requirementItems.length; i++) {
+  for (let i = 0; i < requirementRows.length; i++) {
     if (stopReplayRequested) break;
 
-    const item = requirementItems[i];
-    const itemText = (item.textContent || "").trim().slice(0, 80);
-    console.log(`[Exxat:DETAIL] Clicking requirement ${i + 1}/${requirementItems.length}: "${itemText}"`);
+    const row = requirementRows[i];
+    const nameEl = row.querySelector("span.text-sm.text-gray-900, span[class*='text-sm']");
+    const name = nameEl ? nameEl.textContent.trim() : `Requirement ${i + 1}`;
+    console.log(`[Exxat:DETAIL] Req ${i + 1}/${requirementRows.length}: "${name}"`);
 
-    // Click the requirement item to load its detail in the right panel
-    item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    // Primary: the download arrow button is button.px-3.min-w-[32px] inside this row
+    // CSS.escape needed for the bracket characters in the class name
+    const downloadBtn = row.querySelector("button.px-3") ||
+      row.querySelector("button[class*='min-w']") ||
+      row.querySelector("button[class*='px-3']");
 
-    // Wait a moment for the right panel to update
+    if (downloadBtn) {
+      const style = window.getComputedStyle(downloadBtn);
+      if (style.display !== "none" && style.visibility !== "hidden") {
+        console.log(`[Exxat:DETAIL]   ⬇ Clicking download button for "${name}"`);
+        downloadBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        downloaded++;
+        await sleep(1000);
+        continue;
+      }
+    }
+
+    // Fallback: click the row to open right panel, then find Download button
+    console.log(`[Exxat:DETAIL]   Opening right panel for "${name}"`);
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await sleep(800);
 
-    // Check if a Download button appeared in the right panel
-    const downloadBtn = await findDownloadButton();
-    if (downloadBtn) {
-      console.log(`[Exxat:DETAIL]   ⬇ Download button found — clicking`);
-      downloadBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const rightBtn = await findDownloadButton();
+    if (rightBtn) {
+      console.log(`[Exxat:DETAIL]   ⬇ Right-panel Download for "${name}"`);
+      rightBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       downloaded++;
-      // Wait for the download to initiate before moving to next requirement
-      await sleep(1200);
+      await sleep(1000);
     } else {
-      console.log(`[Exxat:DETAIL]   ℹ No download button for this requirement`);
+      console.log(`[Exxat:DETAIL]   ℹ No download for "${name}"`);
     }
   }
 
-  console.log(`[Exxat:DETAIL] Done — downloaded ${downloaded}/${requirementItems.length} requirements`);
-  return { downloaded, total: requirementItems.length };
+  console.log(`[Exxat:DETAIL] Done — ${downloaded}/${requirementRows.length} downloaded`);
+  return { downloaded, total: requirementRows.length };
 }
 
 /**
- * Finds all requirement items in the left panel of the detail page.
- * Returns clickable elements representing each requirement.
+ * Finds all clickable requirement items in the left panel of the detail page.
+ *
+ * From the Exxat page structure observed in logs and screenshots:
+ * - The left panel has a list of requirements
+ * - Each item shows the requirement name + a status ("Get Started", "Pending Review", etc.)
+ * - Clicking an item loads its detail in the right panel
+ * - Items that have a document uploaded show a Download button in the right panel
+ *
  * @returns {Element[]}
  */
 function getRequirementItems() {
-  // The left panel on Exxat detail page has a list of requirements.
-  // Each item is typically a div or li with the requirement name.
-  // We look for the container that holds the list, then get its children.
-
-  // Strategy 1: look for elements with text matching requirement patterns
-  // The panel has items like "Carry Forward - ...", "Non Carry Forward - ...", "Tuberculosis (TB)"
-  // These are typically inside a scrollable list container on the left side.
-
-  // Try to find the requirements list container
-  // Common patterns: a div with multiple child divs that each have a title + status text
-  const allClickable = Array.from(document.querySelectorAll(
-    'li[class*="item"], li[class*="Item"], ' +
-    'div[class*="item"][class*="list"], ' +
-    '[class*="requirement-item"], [class*="RequirementItem"], ' +
-    '[class*="onboarding"] li, [class*="Onboarding"] li'
-  )).filter((el) => {
+  // Primary selector confirmed from recording logs:
+  // Each requirement row is div.mb-2.flex (Tailwind: margin-bottom-2 + flex)
+  const primary = Array.from(document.querySelectorAll("div.mb-2.flex")).filter((el) => {
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden") return false;
-    const text = (el.textContent || "").trim();
-    if (text.length < 3) return false;
-    return true;
+    // Must contain a span with text (the requirement name)
+    const span = el.querySelector("span");
+    return span && (span.textContent || "").trim().length > 3;
   });
 
-  if (allClickable.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${allClickable.length} requirement items (strategy 1)`);
-    return allClickable;
+  if (primary.length > 0) {
+    console.log(`[Exxat:DETAIL] Found ${primary.length} requirement rows (div.mb-2.flex)`);
+    return primary;
   }
 
-  // Strategy 2: find the left panel by looking for the "Onboarding Requirements" heading
-  // then get all sibling/child clickable items
-  const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6, [class*='heading'], [class*='title']"));
-  const reqHeading = headings.find((h) =>
-    (h.textContent || "").toLowerCase().includes("onboarding requirement")
+  // Fallback: find by status text
+  const statusTexts = ["get started", "pending review", "compliant", "not started", "action needed"];
+  const byStatus = Array.from(document.querySelectorAll("div, li")).filter((el) => {
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const text = (el.textContent || "").trim().toLowerCase();
+    if (text.length > 400) return false;
+    return statusTexts.some((s) => text.includes(s));
+  });
+
+  const deduped = byStatus.filter((el) =>
+    !byStatus.some((other) => other !== el && other.contains(el))
   );
 
-  if (reqHeading) {
-    // Walk up to find the container, then get all list items within it
-    const container = reqHeading.closest("div, section, aside") || reqHeading.parentElement;
-    if (container) {
-      const items = Array.from(container.querySelectorAll("li, [role='listitem'], [class*='item']"))
-        .filter((el) => {
-          const style = window.getComputedStyle(el);
-          if (style.display === "none" || style.visibility === "hidden") return false;
-          const text = (el.textContent || "").trim();
-          return text.length > 3;
-        });
-      if (items.length > 0) {
-        console.log(`[Exxat:DETAIL] Found ${items.length} requirement items (strategy 2 - heading)`);
-        return items;
-      }
-    }
+  if (deduped.length > 0) {
+    console.log(`[Exxat:DETAIL] Found ${deduped.length} requirement rows (status text fallback)`);
+    return deduped;
   }
 
-  // Strategy 3: find all elements that contain "Get Started", "Pending Review", "Download"
-  // as status text — these are the requirement rows
-  const statusTexts = ["get started", "pending review", "compliant", "not started"];
-  const byStatus = Array.from(document.querySelectorAll("li, div, tr"))
-    .filter((el) => {
-      const text = (el.textContent || "").trim().toLowerCase();
-      return statusTexts.some((s) => text.includes(s)) && text.length < 300;
-    })
-    .filter((el) => {
-      const style = window.getComputedStyle(el);
-      return style.display !== "none" && style.visibility !== "hidden";
-    });
-
-  if (byStatus.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${byStatus.length} requirement items (strategy 3 - status text)`);
-    return byStatus;
-  }
-
-  console.warn("[Exxat:DETAIL] Could not find requirement items");
+  console.warn("[Exxat:DETAIL] No requirement rows found");
   return [];
 }
 
 /**
  * Looks for a Download button in the right panel of the detail page.
  * Returns the button element if found, null otherwise.
+ *
+ * From console logs: Exxat uses FontAwesome icons with data-prefix="fal"/"fas".
+ * The Download button contains a FontAwesome download icon + "Download" text.
  * @returns {Promise<Element|null>}
  */
 async function findDownloadButton() {
-  // The Download button appears in the right panel after clicking a requirement.
-  // It has text "Download" and typically an icon.
-  // We give it up to 1.5s to appear (React re-render after click).
-
-  const selectors = [
-    'button[class*="download" i]',
-    'a[class*="download" i]',
-    '[aria-label*="download" i]',
-    '[title*="download" i]',
-  ];
-
-  // First try immediate match
-  for (const sel of selectors) {
-    const el = document.querySelector(sel);
-    if (el) {
-      const style = window.getComputedStyle(el);
-      if (style.display !== "none" && style.visibility !== "hidden") return el;
-    }
+  function search() {
+    const allButtons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+    return allButtons.find((btn) => {
+      const style = window.getComputedStyle(btn);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const text = (btn.textContent || "").trim().toLowerCase();
+      // Must contain "download" text
+      if (!text.includes("download")) return false;
+      // Must NOT be a "History" button or other non-download button
+      if (text.includes("history") || text.includes("upload")) return false;
+      return true;
+    }) || null;
   }
 
-  // Search by text content — find any button/anchor with text "Download"
-  const allButtons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-  const byText = allButtons.find((btn) => {
-    const text = (btn.textContent || "").trim().toLowerCase();
-    const style = window.getComputedStyle(btn);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    return text === "download" || text.includes("download");
-  });
+  // Try immediately
+  const immediate = search();
+  if (immediate) return immediate;
 
-  if (byText) return byText;
-
-  // Wait briefly and try again (right panel may still be loading)
+  // Wait up to 1.5s for the right panel to update after clicking a requirement
   await sleep(500);
-
-  const allButtons2 = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-  return allButtons2.find((btn) => {
-    const text = (btn.textContent || "").trim().toLowerCase();
-    const style = window.getComputedStyle(btn);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    return text === "download" || text.includes("download");
-  }) || null;
+  return search();
 }
 
 // ---------------------------------------------------------------------------
@@ -818,7 +766,7 @@ async function runReplaySession(steps) {
 
 /**
  * Process a single student row using the built-in Exxat engine.
- * 1. Click the eye icon → navigate to detail page
+ * 1. Click the row link → navigate to detail page
  * 2. Download all available documents
  * 3. Navigate back to list page
  *
@@ -829,13 +777,13 @@ async function runReplaySession(steps) {
 async function replayRowBuiltIn(row, listPageUrl) {
   const currentUrl = window.location.href;
 
-  // Click the eye icon to open the student detail page
-  const clicked = clickEyeIcon(row);
+  // Click to open the student detail page
+  const clicked = clickRowToOpenDetail(row);
   if (!clicked) {
-    return { success: false, reason: "Could not find eye/view icon on row" };
+    return { success: false, reason: "Could not find a link to open the student detail page" };
   }
 
-  // Wait for navigation to the detail page
+  // Wait for navigation to the detail page (/assignments/{id})
   try {
     await waitForNavigation(currentUrl, 10000);
     console.log("[Exxat:REPLAY] Navigated to:", window.location.href);
@@ -843,7 +791,7 @@ async function replayRowBuiltIn(row, listPageUrl) {
     return { success: false, reason: "Navigation to detail page timed out" };
   }
 
-  // Wait for the Onboarding tab / requirements to load
+  // Wait for the page to settle
   await sleep(1500);
 
   // Make sure we're on the Onboarding tab
@@ -884,37 +832,54 @@ async function ensureOnboardingTab() {
 
 /**
  * Navigate back to the list page after processing a student.
+ * From logs: breadcrumb link has text "Schedules and onboarding"
+ * and class "link-text".
  * @param {string} listPageUrl
  */
 async function navigateBackToList(listPageUrl) {
   console.log("[Exxat:REPLAY] Navigating back to list page");
 
-  // Strategy 1: click the breadcrumb "Schedules and onboarding" link
-  const breadcrumbs = Array.from(document.querySelectorAll('a, [role="link"], [class*="breadcrumb"]'));
-  const listLink = breadcrumbs.find((el) => {
+  // Strategy 1: find the breadcrumb link by text "Schedules and onboarding"
+  const allLinks = Array.from(document.querySelectorAll("a, [role='link']"));
+  const breadcrumb = allLinks.find((el) => {
     const text = (el.textContent || "").trim().toLowerCase();
-    return text.includes("schedules") || text.includes("onboarding") && !text.includes(">");
+    return text.includes("schedules and onboarding") || text === "schedules";
+  });
+
+  if (breadcrumb) {
+    console.log("[Exxat:REPLAY] Clicking breadcrumb:", breadcrumb.textContent.trim());
+    breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await sleep(2000);
+    try {
+      await waitForElement("table tbody tr", 8000);
+      console.log("[Exxat:REPLAY] Back on list page ✅");
+      return;
+    } catch (_) {}
+  }
+
+  // Strategy 2: look for any link with class "link-text" that goes to /assignments/list
+  const listLink = allLinks.find((el) => {
+    const href = el.getAttribute("href") || "";
+    return href.includes("/assignments/list") || href.includes("/assignments");
   });
 
   if (listLink) {
-    console.log("[Exxat:REPLAY] Clicking breadcrumb:", listLink.textContent.trim());
+    console.log("[Exxat:REPLAY] Clicking list link:", listLink.getAttribute("href"));
     listLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await sleep(2000);
-
-    // Wait for the table to appear
     try {
       await waitForElement("table tbody tr", 8000);
       return;
     } catch (_) {}
   }
 
-  // Strategy 2: browser back
+  // Strategy 3: browser back
   console.log("[Exxat:REPLAY] Using history.back()");
   window.history.back();
-  await sleep(2000);
-
+  await sleep(2500);
   try {
     await waitForElement("table tbody tr", 8000);
+    console.log("[Exxat:REPLAY] Back on list page via history.back() ✅");
   } catch (_) {
     console.warn("[Exxat:REPLAY] Table did not appear after back navigation");
   }
@@ -1119,9 +1084,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
 
     case "START_REPLAY": {
-      const steps = message.steps || [];
+      // Always use the built-in engine — recorded steps are too fragile
+      // for this React app (dynamic selectors, SVG paths, row-specific class paths).
+      // Also force-clear any stored steps so the popup doesn't gray out.
       sendResponse({ ok: true });
-      runReplaySession(steps).catch((err) => {
+      runReplaySession([]).catch((err) => {
         console.error("[Exxat] runReplaySession error:", err);
         chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
       });

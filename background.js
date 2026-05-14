@@ -245,34 +245,13 @@ async function handleMessage(message, sender) {
 
     // -----------------------------------------------------------------------
     case "START_REPLAY": {
-      console.log("[Exxat:BG] START_REPLAY received, tabId:", message.tabId, "steps in memory:", state.steps.length);
+      console.log("[Exxat:BG] START_REPLAY received, tabId:", message.tabId);
       if (state.mode !== "IDLE") {
         console.warn("[Exxat:BG] START_REPLAY rejected — mode is", state.mode);
         return { ok: false, error: `Cannot start replay in mode: ${state.mode}` };
       }
 
-      // Always reload from storage — service worker may have restarted and
-      // lost in-memory steps since the last recording session.
-      try {
-        const persisted = await loadSteps();
-        if (persisted.length > 0) {
-          state.steps = persisted;
-        }
-        state.storageError = null;
-      } catch (err) {
-        state.storageError = "Storage read failed: " + err.message;
-        broadcastStatus();
-        return { ok: false, error: state.storageError };
-      }
-
-      console.log("[Exxat:BG] Steps after storage reload:", state.steps.length);
-      if (state.steps.length === 0) {
-        console.warn("[Exxat:BG] No steps to replay");
-        return { ok: false, error: "No recorded steps to replay." };
-      }
-
       const replayTabId = message.tabId || (await getActiveTab())?.id;
-      console.log("[Exxat:BG] Replaying on tabId:", replayTabId);
       if (!replayTabId) {
         return { ok: false, error: "No active tab found." };
       }
@@ -281,7 +260,8 @@ async function handleMessage(message, sender) {
       state.sessionLog = [];
       state.progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
       state.interrupted = false;
-      await forwardToContent({ action: "START_REPLAY", steps: state.steps }, activeTabId);
+      // Always pass empty steps — content script uses built-in engine
+      await forwardToContent({ action: "START_REPLAY", steps: [] }, activeTabId);
       console.log("[Exxat:BG] START_REPLAY forwarded to content script");
       broadcastStatus();
       return { ok: true };

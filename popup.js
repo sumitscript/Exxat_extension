@@ -74,8 +74,8 @@ function render(payload) {
   btnStartReplay.style.display  = mode === "IDLE"       ? "" : "none";
   btnStopReplay.style.display   = mode === "REPLAYING"  ? "" : "none";
 
-  // Disable Start Replay when no steps recorded or storage error present
-  btnStartReplay.disabled = (stepCount ?? 0) === 0 || !!storageError;
+  // Disable Start Replay only if there's a storage error
+  btnStartReplay.disabled = !!storageError;
 
   // Clear / Export always visible but disabled during active sessions
   btnClear.disabled   = mode !== "IDLE";
