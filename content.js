@@ -386,178 +386,78 @@ function clickRowToOpenDetail(row) {
 async function downloadAllDocumentsOnDetailPage() {
   console.log("[Exxat:DETAIL] Starting on", window.location.href);
 
-  // Wait for requirement rows to render — wait until count stabilizes
-  try {
-    await waitForElement("div.mb-2.flex", 8000);
-  } catch (_) {
-    console.warn("[Exxat:DETAIL] div.mb-2.flex not found after 8s");
-  }
-
-  // Wait for React to finish rendering all rows (count should stabilize)
-  let prevCount = 0;
+  // Wait for React to render the requirements list
   for (let i = 0; i < 5; i++) {
-    await sleep(600);
-    const count = document.querySelectorAll("div.mb-2.flex").length;
-    if (count > 0 && count === prevCount) break; // stable
-    prevCount = count;
+    await sleep(800);
+    if (document.body.innerText.includes("Due:")) break;
   }
 
-  const requirementRows = getRequirementItems();
-  console.log(`[Exxat:DETAIL] Found ${requirementRows.length} requirement rows`);
-
+  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
+  
+  // Find all elements that have text matching a status word exactly, or starting with "Due:"
+  const allLeafs = Array.from(document.querySelectorAll("*")).filter(el => el.children.length === 0 && (el.textContent||"").trim().length > 0);
+  
+  const indicatorEls = allLeafs.filter(el => {
+    const t = (el.textContent || "").trim().toLowerCase();
+    return STATUS_WORDS.includes(t) || t.startsWith("due:");
+  });
+  
   let downloaded = 0;
-
-  for (let i = 0; i < requirementRows.length; i++) {
+  let total = 0;
+  const processedButtons = new Set();
+  
+  for (const el of indicatorEls) {
     if (stopReplayRequested) break;
-
-    const row = requirementRows[i];
-
-    // Get requirement name — it's in a span inside the row
-    // From screenshot: "Carry Forward - Epic Request Form", "Tuberculosis (TB)", etc.
-    const spans = Array.from(row.querySelectorAll("span, p, div"));
-    const nameEl = spans.find((el) => {
-      const t = (el.textContent || "").trim();
-      // Name spans have meaningful text, not just status words
-      return t.length > 5 &&
-        !["get started", "pending review", "compliant", "not started", "due: na", "due:"].includes(t.toLowerCase()) &&
-        el.children.length === 0; // leaf node
-    });
-    const name = nameEl ? nameEl.textContent.trim() : `Requirement ${i + 1}`;
-
-    // The ↓ download button is the only button inside this requirement row.
-    // From recording: button.px-3.min-w-[32px]
-    // It contains an SVG icon (no text). When no file is available, the site
-    // shows a 🚫 icon instead — the button itself may still be in the DOM
-    // but React marks it disabled or with pointer-events:none.
-    const btn = row.querySelector("button");
-
-    if (!btn) {
-      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — no button, skipping`);
-      continue;
+    
+    // Walk up to 6 levels to find the container block
+    let parent = el.parentElement;
+    let btn = null;
+    for (let i = 0; i < 6; i++) {
+      if (!parent) break;
+      const candidates = Array.from(parent.querySelectorAll("button")).filter(b => {
+        const text = (b.textContent||"").trim().toLowerCase();
+        // Exclude "Message" button, exclude buttons with obvious non-download text
+        if (text.includes("message") || text.includes("ask leo")) return false;
+        // Must contain an SVG icon (the download icon)
+        return b.querySelector("svg"); 
+      });
+      if (candidates.length > 0) {
+        btn = candidates[0]; // take the first valid button in this block
+        break;
+      }
+      parent = parent.parentElement;
     }
+    
+    if (btn && !processedButtons.has(btn)) {
+      processedButtons.add(btn);
+      total++;
+      
+      const computedStyle = window.getComputedStyle(btn);
+      const isDisabled =
+        btn.disabled ||
+        btn.getAttribute("disabled") !== null ||
+        btn.getAttribute("aria-disabled") === "true" ||
+        computedStyle.pointerEvents === "none" ||
+        computedStyle.cursor === "not-allowed" ||
+        parseFloat(computedStyle.opacity) < 0.5;
 
-    // Disabled check — covers all the ways Exxat marks a button as unavailable
-    const computedStyle = window.getComputedStyle(btn);
-    const isDisabled =
-      btn.disabled ||
-      btn.getAttribute("disabled") !== null ||
-      btn.getAttribute("aria-disabled") === "true" ||
-      computedStyle.pointerEvents === "none" ||
-      computedStyle.cursor === "not-allowed" ||
-      parseFloat(computedStyle.opacity) < 0.5;
-
-    if (isDisabled) {
-      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — disabled (no file), skipping`);
-      continue;
+      if (isDisabled) {
+        console.log(`[Exxat:DETAIL] Requirement download button disabled, skipping`);
+        continue;
+      }
+      
+      console.log(`[Exxat:DETAIL] Clicking download button`);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      downloaded++;
+      await sleep(1500); // Wait for download to trigger
     }
-
-    console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — clicking ↓`);
-    btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    downloaded++;
-    await sleep(1500); // give the browser time to trigger the download
   }
 
-  console.log(`[Exxat:DETAIL] Done — ${downloaded}/${requirementRows.length} downloaded`);
-  return { downloaded, total: requirementRows.length };
+  console.log(`[Exxat:DETAIL] Done — ${downloaded}/${total} downloaded`);
+  return { downloaded, total };
 }
 
-/**
- * Finds all clickable requirement items in the left panel of the detail page.
- *
- * From the Exxat page structure observed in logs and screenshots:
- * - The left panel has a list of requirements
- * - Each item shows the requirement name + a status ("Get Started", "Pending Review", etc.)
- * - Clicking an item loads its detail in the right panel
- * - Items that have a document uploaded show a Download button in the right panel
- *
- * @returns {Element[]}
- */
-function getRequirementItems() {
-  // Each requirement row on the detail page is a div.mb-2.flex containing:
-  //   - A span/div with the requirement name (e.g. "Carry Forward - Epic Request Form")
-  //   - A small ↓ button (the download icon)
-  //   - A status text ("Get Started", "Pending Review", etc.)
-  //
-  // We identify them by: div.mb-2.flex that contains BOTH a button AND
-  // a status text ("get started", "pending review", etc.)
-
-  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started"];
-
-  const rows = Array.from(document.querySelectorAll("div.mb-2.flex")).filter((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    // Must have a button (the ↓ download icon)
-    if (!el.querySelector("button")) return false;
-    // Must contain a status word — this distinguishes requirement rows
-    // from other div.mb-2.flex elements (headers, etc.)
-    const text = (el.textContent || "").trim().toLowerCase();
-    return STATUS_WORDS.some((s) => text.includes(s));
-  });
-
-  if (rows.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${rows.length} requirement rows`);
-    return rows;
-  }
-
-  // Fallback: find by button.px-3 and walk up to the containing row
-  const btns = Array.from(document.querySelectorAll("button.px-3, button[class*='px-3']"));
-  const containers = btns.map((btn) => {
-    // Walk up max 4 levels to find a container with status text
-    let el = btn.parentElement;
-    for (let i = 0; i < 4; i++) {
-      if (!el) break;
-      const text = (el.textContent || "").toLowerCase();
-      if (STATUS_WORDS.some((s) => text.includes(s))) return el;
-      el = el.parentElement;
-    }
-    return btn.closest("div.mb-2") || btn.parentElement?.parentElement;
-  }).filter(Boolean);
-
-  const unique = [...new Set(containers)].filter((el) => {
-    const text = (el.textContent || "").trim();
-    return text.length > 3;
-  });
-
-  if (unique.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${unique.length} requirement rows (fallback)`);
-    return unique;
-  }
-
-  console.warn("[Exxat:DETAIL] No requirement rows found");
-  return [];
-}
-
-/**
- * Looks for a Download button in the right panel of the detail page.
- * Returns the button element if found, null otherwise.
- *
- * From console logs: Exxat uses FontAwesome icons with data-prefix="fal"/"fas".
- * The Download button contains a FontAwesome download icon + "Download" text.
- * @returns {Promise<Element|null>}
- */
-async function findDownloadButton() {
-  function search() {
-    const allButtons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-    return allButtons.find((btn) => {
-      const style = window.getComputedStyle(btn);
-      if (style.display === "none" || style.visibility === "hidden") return false;
-      const text = (btn.textContent || "").trim().toLowerCase();
-      // Must contain "download" text
-      if (!text.includes("download")) return false;
-      // Must NOT be a "History" button or other non-download button
-      if (text.includes("history") || text.includes("upload")) return false;
-      return true;
-    }) || null;
-  }
-
-  // Try immediately
-  const immediate = search();
-  if (immediate) return immediate;
-
-  // Wait up to 1.5s for the right panel to update after clicking a requirement
-  await sleep(500);
-  return search();
-}
+// (Removed obsolete getRequirementItems and findDownloadButton logic)
 
 // ---------------------------------------------------------------------------
 // Pagination
@@ -631,15 +531,13 @@ let stopReplayRequested = false;
  *   5. Repeat for next row
  *   6. After all rows, click Next page if available
  *
- * NOTE: `steps` parameter is kept for compatibility but the Exxat-specific
- * engine does NOT use recorded steps — it drives the UI directly based on
- * the known page structure. If steps are provided and contain a custom
- * recorded sequence, it falls back to the recorded-step replay.
+ * NOTE: The engine does NOT use recorded steps — it drives the UI directly based on
+ * the known page structure (which is far more robust against React's dynamic DOM
+ * and changing row IDs). It inherently handles looping across all rows and requirements.
  *
- * @param {Array<object>} steps
  * @returns {Promise<void>}
  */
-async function runReplaySession(steps) {
+async function runReplaySession() {
   stopReplayRequested = false;
   mode = "REPLAYING";
   startKeepalive();
@@ -845,16 +743,15 @@ async function ensureOnboardingTab() {
 async function navigateBackToList(listPageUrl) {
   console.log("[Exxat:REPLAY] Navigating back to list page");
 
-  // Best approach for this React SPA: click the "Schedules and onboarding"
-  // breadcrumb link. From screenshots it's clearly visible at the top.
-  // Selector confirmed from recording: a.link-text with that text.
-  const breadcrumb = Array.from(document.querySelectorAll("a"))
-    .find((el) => (el.textContent || "").trim().toLowerCase() === "schedules and onboarding");
+  // Approach 1: Click the "Schedules and onboarding" breadcrumb link
+  const allLeafs = Array.from(document.querySelectorAll("*")).filter(el => el.children.length === 0);
+  const breadcrumb = allLeafs.find((el) => (el.textContent || "").trim().toLowerCase() === "schedules and onboarding");
 
   if (breadcrumb) {
     console.log("[Exxat:REPLAY] Clicking breadcrumb: Schedules and onboarding");
+    const clickable = breadcrumb.closest("a, button") || breadcrumb;
     const beforeUrl = window.location.href;
-    breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     try {
       await waitForNavigation(beforeUrl, 8000);
       await waitForElement("table tbody tr", 8000);
@@ -1082,7 +979,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // for this React app (dynamic selectors, SVG paths, row-specific class paths).
       // Also force-clear any stored steps so the popup doesn't gray out.
       sendResponse({ ok: true });
-      runReplaySession([]).catch((err) => {
+      runReplaySession().catch((err) => {
         console.error("[Exxat] runReplaySession error:", err);
         chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
       });
