@@ -322,12 +322,19 @@ function extractStudentId(row) {
 // Exxat-specific: navigate into a student row
 // ---------------------------------------------------------------------------
 
+function simulateReactClick(element) {
+  const clickEvent = new MouseEvent("click", {
+    view: window,
+    bubbles: true,
+    cancelable: true,
+    button: 0
+  });
+  element.dispatchEvent(clickEvent);
+}
+
 /**
  * From the logs: clicking the status cell link (a.flex.gap-2 or the row's
  * detail link) navigates to /assignments/{id}?tab=caas.
- * The selector from the recording was:
- *   tr.group.duration-150:nth-of-type(2) > td... > div.min-w-0.py-3
- * but that's row-specific. We find the link dynamically per row.
  *
  * @param {Element} row
  * @returns {boolean}
@@ -341,37 +348,33 @@ function clickRowToOpenDetail(row) {
   });
   if (detailLink) {
     console.log("[Exxat:NAV] Clicking detail link:", detailLink.getAttribute("href"));
-    detailLink.click();
-    detailLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    simulateReactClick(detailLink);
     return true;
   }
 
-  // Strategy 2: the status/name cell — from logs it's a div or anchor in the row
-  // The onboarding status cell is the last meaningful cell; the student name cell
-  // is earlier. Click the student name/details cell which is a link.
+  // Strategy 2: the status/name cell
   const statusLink = row.querySelector("a.flex, a[class*='flex']");
   if (statusLink) {
     console.log("[Exxat:NAV] Clicking flex link:", statusLink.textContent.trim().slice(0, 50));
-    statusLink.click();
-    statusLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    simulateReactClick(statusLink);
     return true;
   }
 
-  // Strategy 3: click the onboarding status cell div (from logs: div.min-w-0.py-3)
+  // Strategy 3: click the onboarding status cell div
   const statusCell = row.querySelector("div.min-w-0.py-3, td div[class*='py-3']");
   if (statusCell) {
     console.log("[Exxat:NAV] Clicking status cell div");
-    statusCell.click();
-    statusCell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    simulateReactClick(statusCell);
     return true;
   }
 
   // Strategy 4: click the row itself
   console.log("[Exxat:NAV] Clicking row directly");
-  row.click();
-  row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  simulateReactClick(row);
   return true;
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Exxat-specific: download all documents on the student detail page
@@ -390,17 +393,24 @@ function clickRowToOpenDetail(row) {
 async function downloadAllDocumentsOnDetailPage() {
   console.log("[Exxat:DETAIL] Starting on", window.location.href);
 
+  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
+
   // Wait for React to render the requirements list and download icons
-  for (let i = 0; i < 10; i++) {
+  let found = false;
+  for (let i = 0; i < 25; i++) {
     await sleep(1000);
-    if (/due:/i.test(document.body.innerText)) {
+    const text = document.body.innerText.toLowerCase();
+    if (/due:/i.test(text) || STATUS_WORDS.some(w => text.includes(w))) {
       // Extra wait for the icons to fully load and enable
-      await sleep(3000);
+      await sleep(3500);
+      found = true;
       break;
     }
   }
 
-  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
+  if (!found) {
+    console.warn("[Exxat:DETAIL] Timed out waiting for requirements to render.");
+  }
   
   // Find all text nodes that match a status word exactly, or start with "Due:"
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -444,10 +454,9 @@ async function downloadAllDocumentsOnDetailPage() {
       total++;
       
       console.log(`[Exxat:DETAIL] Clicking download button`);
-      btn.click();
-      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      simulateReactClick(btn);
       downloaded++;
-      await sleep(1500); // Wait for download to trigger
+      await sleep(2000); // Wait for download to trigger
     }
   }
 
@@ -574,30 +583,40 @@ async function runReplaySession() {
       try { await waitForElement("table tbody tr", 8000); } catch (_) {}
     }
 
-    const rows = getTableRows();
-    console.log(`[Exxat:REPLAY] 📄 Page ${pageIndex + 1}: ${rows.length} rows`);
+    const initialRows = getTableRows();
+    console.log(`[Exxat:REPLAY] 📄 Page ${pageIndex + 1}: ${initialRows.length} rows`);
 
-    if (rows.length === 0) {
+    if (initialRows.length === 0) {
       console.warn("[Exxat:REPLAY] No rows found — ending session");
       break;
     }
 
-    progress.total += rows.length;
+    progress.total += initialRows.length;
     await sendProgressUpdate({ ...progress });
 
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = 0; i < initialRows.length; i++) {
       if (stopReplayRequested) break;
 
-      const row = rows[i];
+      // RE-QUERY the DOM to get the fresh element!
+      // React destroys and recreates the list page table when returning from the detail page.
+      // If we use the old `initialRows[i]`, it is detached from the DOM, so React Router
+      // never sees the click event, leading to a full page reload!
+      const currentRows = getTableRows();
+      if (i >= currentRows.length) {
+         console.warn("[Exxat:REPLAY] Table rows shrank unexpectedly. Moving to next page.");
+         break;
+      }
+      
+      const row = currentRows[i];
       const studentId = extractStudentId(row);
       const onboardingStatus = getOnboardingStatus(row);
-      console.log(`[Exxat:REPLAY] Row ${i + 1}/${rows.length}: "${studentId}" status="${onboardingStatus}"`);
+      console.log(`[Exxat:REPLAY] Row ${i + 1}/${initialRows.length}: "${studentId}" status="${onboardingStatus}"`);
 
       if (SKIP_STATUSES.includes(onboardingStatus.toLowerCase())) {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (${onboardingStatus})`);
         progress.skipped++;
         await sendLogEntry({
-          rowIndex: pageIndex * rows.length + i, studentId,
+          rowIndex: pageIndex * initialRows.length + i, studentId,
           status: "skipped", reason: `Onboarding Status: ${onboardingStatus}`,
           timestamp: new Date().toISOString(),
         });
@@ -612,7 +631,7 @@ async function runReplaySession() {
         if (result.success) {
           progress.processed++;
           logEntry = {
-            rowIndex: pageIndex * rows.length + i, studentId,
+            rowIndex: pageIndex * initialRows.length + i, studentId,
             status: "processed", reason: `Downloaded ${result.downloaded || 0} document(s)`,
             timestamp: new Date().toISOString(),
           };
@@ -620,7 +639,7 @@ async function runReplaySession() {
         } else {
           progress.failed++;
           logEntry = {
-            rowIndex: pageIndex * rows.length + i, studentId,
+            rowIndex: pageIndex * initialRows.length + i, studentId,
             status: "failed", reason: result.reason || "Unknown failure",
             timestamp: new Date().toISOString(),
           };
@@ -629,7 +648,7 @@ async function runReplaySession() {
       } catch (err) {
         progress.failed++;
         logEntry = {
-          rowIndex: pageIndex * rows.length + i, studentId,
+          rowIndex: pageIndex * initialRows.length + i, studentId,
           status: "failed", reason: err.message,
           timestamp: new Date().toISOString(),
         };
@@ -647,7 +666,7 @@ async function runReplaySession() {
       // Wait for React to fully hydrate the list page before clicking the next row.
       // If we click too early, the <a> tag won't have its SPA onClick handler yet,
       // which causes a full page reload and breaks the script.
-      await sleep(3500);
+      await sleep(5000);
     }
 
     if (stopReplayRequested) break;
@@ -691,7 +710,7 @@ async function replayRowBuiltIn(row, listPageUrl) {
 
   // Wait for navigation to the detail page
   try {
-    await waitForNavigation(currentUrl, 10000);
+    await waitForNavigation(currentUrl, 15000);
     console.log("[Exxat:REPLAY] Navigated to:", window.location.href);
   } catch (err) {
     return { success: false, reason: "Navigation to detail page timed out" };
@@ -759,11 +778,10 @@ async function navigateBackToList(listPageUrl) {
     console.log("[Exxat:REPLAY] Clicking breadcrumb: Schedules and onboarding");
     const clickable = breadcrumb.closest("a, button, [role='button']") || breadcrumb;
     const beforeUrl = window.location.href;
-    clickable.click();
-    clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    simulateReactClick(clickable);
     try {
-      await waitForNavigation(beforeUrl, 8000);
-      await waitForElement("table tbody tr", 8000);
+      await waitForNavigation(beforeUrl, 15000);
+      await waitForElement("table tbody tr", 15000);
       console.log("[Exxat:REPLAY] Back on list page ✅");
       return;
     } catch (_) {
