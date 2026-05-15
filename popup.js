@@ -16,6 +16,15 @@ const btnStartReplay     = document.getElementById("btn-start-replay");
 const btnStopReplay      = document.getElementById("btn-stop-replay");
 const btnClear           = document.getElementById("btn-clear");
 const btnExport          = document.getElementById("btn-export");
+const btnClearHistory    = document.getElementById("btn-clear-history");
+
+const csvInput           = document.getElementById("csv-upload");
+const csvUploadLabel     = document.getElementById("csv-upload-label");
+const targetCountEl      = document.getElementById("target-count");
+const btnDownloadTemplate= document.getElementById("btn-download-template");
+const btnClearTarget     = document.getElementById("btn-clear-target");
+const targetInfoWrapper  = document.getElementById("target-info-wrapper");
+const btnExportHistory   = document.getElementById("btn-export-history");
 
 const progressSection    = document.getElementById("progress-section");
 const progProcessed      = document.getElementById("prog-processed");
@@ -73,6 +82,17 @@ function render(payload) {
   btnStopRecord.style.display   = mode === "RECORDING"  ? "" : "none";
   btnStartReplay.style.display  = mode === "IDLE"       ? "" : "none";
   btnStopReplay.style.display   = mode === "REPLAYING"  ? "" : "none";
+
+  // Hide CSV upload and template stuff during replay
+  const isIdle = mode === "IDLE";
+  csvUploadLabel.style.display = isIdle ? "" : "none";
+  btnDownloadTemplate.style.display = isIdle ? "" : "none";
+  
+  if (isIdle && targetCountEl.textContent.trim().length > 0) {
+    targetInfoWrapper.style.display = "block";
+  } else {
+    targetInfoWrapper.style.display = "none";
+  }
 
   // Disable Start Replay only if there's a storage error
   btnStartReplay.disabled = !!storageError;
@@ -202,9 +222,114 @@ chrome.runtime.sendMessage({ action: "GET_STATUS" }, (response) => {
   }
 });
 
+// Load target template count & history
+function loadStorageData() {
+  chrome.storage.local.get(["targetScheduleIds", "processedHistory"], (res) => {
+    if (res.targetScheduleIds && res.targetScheduleIds.length > 0) {
+      targetCountEl.textContent = `Target: ${res.targetScheduleIds.length} students loaded`;
+      if (currentMode === "IDLE") targetInfoWrapper.style.display = "block";
+    } else {
+      targetCountEl.textContent = "";
+      targetInfoWrapper.style.display = "none";
+    }
+    
+    if (res.processedHistory && res.processedHistory.length > 0) {
+      btnClearHistory.textContent = `Clear History (${res.processedHistory.length})`;
+      btnExportHistory.disabled = false;
+      btnClearHistory.disabled = false;
+    } else {
+      btnClearHistory.textContent = "Clear Download History";
+      btnExportHistory.disabled = true;
+      btnClearHistory.disabled = true;
+    }
+  });
+}
+
+loadStorageData();
+
 // Poll every second while popup is open to stay in sync with background state
 setInterval(() => {
   chrome.runtime.sendMessage({ action: "GET_STATUS" }, (response) => {
     if (response?.payload) render(response.payload);
   });
 }, 1000);
+
+// ---------------------------------------------------------------------------
+// CSV Upload & Target Filtering
+// ---------------------------------------------------------------------------
+
+csvInput.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const text = event.target.result;
+    const lines = text.split(/\r?\n/);
+    const ids = new Set();
+    
+    for (const line of lines) {
+      // Find numbers that look like Schedule IDs (6-12 digits)
+      const matches = line.match(/\b\d{6,12}\b/g);
+      if (matches) {
+        matches.forEach(m => ids.add(m));
+      }
+    }
+
+    const arr = Array.from(ids);
+    chrome.storage.local.set({ targetScheduleIds: arr }, () => {
+      loadStorageData();
+      alert(`Successfully loaded ${arr.length} Schedule IDs from CSV.`);
+    });
+  };
+  reader.readAsText(file);
+});
+
+btnDownloadTemplate.addEventListener("click", () => {
+  const csvContent = "Schedule ID\n10002117\n10002126";
+  const blob = new Blob([csvContent], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Target_Template.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+btnClearTarget.addEventListener("click", () => {
+  chrome.storage.local.set({ targetScheduleIds: [] }, () => {
+    loadStorageData();
+  });
+});
+
+btnClearHistory.addEventListener("click", () => {
+  if (confirm("Are you sure you want to clear the download history? The extension will redownload files for all students on the next run.")) {
+    chrome.storage.local.set({ processedHistory: [] }, () => {
+      loadStorageData();
+      alert("Download history cleared.");
+    });
+  }
+});
+
+btnExportHistory.addEventListener("click", () => {
+  chrome.storage.local.get("processedHistory", (res) => {
+    const history = res.processedHistory || [];
+    if (history.length === 0) return;
+    
+    // Support string arrays or objects mapping to CSV
+    const headers = ["Schedule ID", "Timestamp"];
+    const rows = history.map(item => {
+      if (typeof item === "string") return `"${item}",""`;
+      return `"${item.id || item.scheduleId || ''}","${item.timestamp || ''}"`;
+    });
+    
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Download_History_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+});

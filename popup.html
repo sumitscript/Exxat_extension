@@ -93,6 +93,28 @@
     .btn-danger    { background: #e02424; color: #fff; }
     .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
     .btn-success   { background: #057a55; color: #fff; }
+    .btn-outline   { background: transparent; color: #1a56db; border: 1px solid #1a56db; }
+
+    input[type="file"] {
+      display: none;
+    }
+    .file-upload-label {
+      display: inline-block;
+      text-align: center;
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px dashed #1a56db;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #1a56db;
+      background: #eff6ff;
+      transition: background 0.15s;
+    }
+    .file-upload-label:hover {
+      background: #dbeafe;
+    }
 
     /* ---- Progress ---- */
     #progress-section {
@@ -211,12 +233,32 @@
 
     <!-- Mode-appropriate controls (Requirements 1.4, 6.1) -->
     <div class="btn-group" id="controls">
-      <button id="btn-start-record"  class="btn-primary">Start Recording</button>
+      <button id="btn-start-record"  class="btn-primary" style="display:none">Start Recording</button>
       <button id="btn-stop-record"   class="btn-danger"  style="display:none">Stop Recording</button>
+      
+      <div style="display:flex; gap:6px;">
+        <label class="file-upload-label" id="csv-upload-label" style="flex:1;">
+          Upload Target CSV
+          <input type="file" id="csv-upload" accept=".csv" />
+        </label>
+        <button id="btn-download-template" class="btn-outline" style="flex:1;">Download Template</button>
+      </div>
+      
+      <div id="target-info-wrapper" style="display:none; text-align:center; margin-bottom:6px;">
+        <div id="target-count" style="font-size:11px; color:#057a55; display:inline-block; margin-right:8px;"></div>
+        <button id="btn-clear-target" class="btn-outline" style="font-size:10px; padding:2px 6px;">Clear Targets</button>
+      </div>
+
       <button id="btn-start-replay"  class="btn-success">Start Replay</button>
       <button id="btn-stop-replay"   class="btn-danger"  style="display:none">Stop Replay</button>
-      <button id="btn-clear"         class="btn-secondary">Clear Steps</button>
-      <button id="btn-export"        class="btn-secondary">Export Log</button>
+      
+      <div style="display:flex; gap:6px; margin-top:6px;">
+        <button id="btn-clear-history" class="btn-outline" style="flex:1;">Clear Download History</button>
+        <button id="btn-export-history" class="btn-secondary" style="flex:1;">Export History</button>
+      </div>
+      
+      <button id="btn-clear"         class="btn-secondary" style="display:none">Clear Steps</button>
+      <button id="btn-export"        class="btn-secondary">Export Session Log</button>
     </div>
 
     <!-- Live progress (Requirement 6.1) -->

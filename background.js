@@ -38,6 +38,12 @@ const state = {
  */
 let activeTabId = null;
 
+/**
+ * The current subfolder path for intercepted downloads.
+ * @type {string | null}
+ */
+let currentDownloadFolder = null;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -260,6 +266,11 @@ async function handleMessage(message, sender) {
       state.sessionLog = [];
       state.progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
       state.interrupted = false;
+      currentDownloadFolder = null;
+      
+      // Save to storage for service worker restarts
+      chrome.storage.local.set({ extensionMode: "REPLAYING", currentDownloadFolder: null });
+
       // Always pass empty steps — content script uses built-in engine
       await forwardToContent({ action: "START_REPLAY", steps: [] }, activeTabId);
       console.log("[Exxat:BG] START_REPLAY forwarded to content script");
@@ -274,6 +285,9 @@ async function handleMessage(message, sender) {
       }
       state.mode = "IDLE";
       activeTabId = null;
+      currentDownloadFolder = null;
+      chrome.storage.local.set({ extensionMode: "IDLE", currentDownloadFolder: null });
+      
       await forwardToContent({ action: "STOP_REPLAY" });
       broadcastStatus();
       return { ok: true };
@@ -366,7 +380,15 @@ async function handleMessage(message, sender) {
     case "REPLAY_COMPLETE": {
       state.mode = "IDLE";
       activeTabId = null;
+      currentDownloadFolder = null;
+      chrome.storage.local.set({ extensionMode: "IDLE", currentDownloadFolder: null });
       broadcastStatus();
+      return { ok: true };
+    }
+
+    case "SET_DOWNLOAD_FOLDER": {
+      currentDownloadFolder = message.folder;
+      chrome.storage.local.set({ currentDownloadFolder: message.folder });
       return { ok: true };
     }
 
@@ -429,3 +451,21 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
 // Navigation within the same tab during replay is expected (e.g. opening a
 // student detail page). We only interrupt if the tab is closed entirely,
 // which is handled by chrome.tabs.onRemoved above.
+
+// ---------------------------------------------------------------------------
+// Downloads Interceptor (Subfolders)
+// ---------------------------------------------------------------------------
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  // Use async lookup to survive Service Worker restarts
+  chrome.storage.local.get(["extensionMode", "currentDownloadFolder"], (res) => {
+    if (res.extensionMode === "REPLAYING" && res.currentDownloadFolder) {
+      // Clean filename of any weird characters
+      const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+      suggest({ filename: `${res.currentDownloadFolder}/${safeFilename}` });
+    } else {
+      suggest({ filename: item.filename });
+    }
+  });
+  return true; // Indicates asynchronous suggestion
+});

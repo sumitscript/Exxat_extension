@@ -311,11 +311,55 @@ function extractStudentId(row) {
     const text = cell.textContent.trim();
     if (text.includes("@")) return text.slice(0, 100);
   }
+  return "(unknown)";
+}
+
+/**
+ * Extract Schedule ID (assumed to be a ~6-12 digit number in the row).
+ * @param {Element} row
+ * @returns {string|null}
+ */
+function extractScheduleId(row) {
+  const cells = Array.from(row.querySelectorAll("td"));
   for (const cell of cells) {
     const text = cell.textContent.trim();
-    if (text.length > 0) return text.slice(0, 100);
+    if (/^\d{6,12}$/.test(text)) {
+      return text;
+    }
   }
-  return "(unknown)";
+  // Try finding anywhere in text if not isolated in a cell
+  const match = row.textContent.match(/\b\d{8}\b/);
+  return match ? match[0] : null;
+}
+
+/**
+ * Extract clean student name.
+ * @param {Element} row
+ * @returns {string}
+ */
+function extractStudentName(row) {
+  const cells = Array.from(row.querySelectorAll("td"));
+  for (const cell of cells) {
+    const text = cell.textContent.trim();
+    if (text.includes("@")) {
+      const parts = text.split("@")[0].split(/(?=[A-Z])/); // basic split or just take first part
+      // Usually Exxat has name and email. We can just take the first 15 chars or so
+      const name = text.split("@")[0].replace(/Flagged.*|prod_.*/i, '').trim();
+      return name.replace(/[<>:"/\\|?*]+/g, '_').slice(0, 30) || "Unknown_Student";
+    }
+  }
+  return "Unknown_Student";
+}
+
+/**
+ * Extract the entire row text as a CSV line for the metadata file.
+ * @param {Element} row
+ * @returns {string}
+ */
+function extractRowAsCsvLine(row) {
+  const cells = Array.from(row.querySelectorAll("td"));
+  const rowData = cells.map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`);
+  return rowData.join(",");
 }
 
 // ---------------------------------------------------------------------------
@@ -496,9 +540,9 @@ async function clickNextPage() {
   nextBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
   // Wait for table rows to re-render
-  await sleep(1500);
+  await sleep(3500); // Increased for safety
   try {
-    await waitForElement("table tbody tr", 10000);
+    await waitForElement("table tbody tr", 15000);
   } catch (_) {}
 
   return true;
@@ -572,6 +616,20 @@ async function runReplaySession() {
   const progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
   let pageIndex = 0;
 
+  // Load target template list and processing history from storage
+  let targetScheduleIds = [];
+  let processedHistory = [];
+  try {
+    const data = await new Promise(r => chrome.storage.local.get(["targetScheduleIds", "processedHistory"], r));
+    targetScheduleIds = data.targetScheduleIds || [];
+    processedHistory = data.processedHistory || [];
+  } catch (_) {}
+
+  const targetSet = new Set(targetScheduleIds.map(String));
+  const historySet = new Set(processedHistory.map(item => typeof item === "string" ? item : String(item.scheduleId || item.id)));
+
+  console.log(`[Exxat:REPLAY] Target Set size: ${targetSet.size}, History size: ${historySet.size}`);
+
   while (true) {
     if (stopReplayRequested) break;
 
@@ -598,9 +656,6 @@ async function runReplaySession() {
       if (stopReplayRequested) break;
 
       // RE-QUERY the DOM to get the fresh element!
-      // React destroys and recreates the list page table when returning from the detail page.
-      // If we use the old `initialRows[i]`, it is detached from the DOM, so React Router
-      // never sees the click event, leading to a full page reload!
       const currentRows = getTableRows();
       if (i >= currentRows.length) {
          console.warn("[Exxat:REPLAY] Table rows shrank unexpectedly. Moving to next page.");
@@ -609,9 +664,29 @@ async function runReplaySession() {
       
       const row = currentRows[i];
       const studentId = extractStudentId(row);
+      const scheduleId = extractScheduleId(row);
+      const studentName = extractStudentName(row);
       const onboardingStatus = getOnboardingStatus(row);
-      console.log(`[Exxat:REPLAY] Row ${i + 1}/${initialRows.length}: "${studentId}" status="${onboardingStatus}"`);
+      
+      console.log(`[Exxat:REPLAY] Row ${i + 1}/${initialRows.length}: "${studentId}" ID="${scheduleId}" status="${onboardingStatus}"`);
 
+      // 1. Target Template Filter
+      if (targetSet.size > 0 && scheduleId && !targetSet.has(String(scheduleId))) {
+        console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (Schedule ID ${scheduleId} not in target template)`);
+        progress.skipped++;
+        await sendProgressUpdate({ ...progress });
+        continue;
+      }
+
+      // 2. Duplicate Prevention
+      if (scheduleId && historySet.has(String(scheduleId))) {
+        console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (Schedule ID ${scheduleId} already downloaded previously)`);
+        progress.skipped++;
+        await sendProgressUpdate({ ...progress });
+        continue;
+      }
+
+      // 3. Skip Status Filter
       if (SKIP_STATUSES.includes(onboardingStatus.toLowerCase())) {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (${onboardingStatus})`);
         progress.skipped++;
@@ -626,6 +701,27 @@ async function runReplaySession() {
 
       let logEntry;
       try {
+        // Set the Subfolder for downloads in the Background Worker
+        const folderName = `Exxat_Downloads/${scheduleId || 'UnknownID'}_${studentName || 'UnknownName'}`;
+        await chrome.runtime.sendMessage({ action: "SET_DOWNLOAD_FOLDER", folder: folderName });
+
+        // Download the Metadata file directly using a blob
+        try {
+          const csvLine = extractRowAsCsvLine(row);
+          const blob = new Blob([csvLine], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `student_metadata.csv`; // The background worker will prepend the folder!
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          await sleep(500);
+        } catch(e) {
+          console.warn("[Exxat:REPLAY] Failed to download metadata CSV", e);
+        }
+
         const result = await replayRowBuiltIn(row, listPageUrl);
 
         if (result.success) {
@@ -636,6 +732,23 @@ async function runReplaySession() {
             timestamp: new Date().toISOString(),
           };
           console.log(`[Exxat:REPLAY]   ✅ PROCESSED — ${result.downloaded || 0} downloads`);
+          
+          // Save to persistent history to prevent duplicates
+          if (scheduleId) {
+            historySet.add(String(scheduleId));
+            const exists = processedHistory.some(item => 
+              (typeof item === "string" ? item : String(item.scheduleId || item.id)) === String(scheduleId)
+            );
+            if (!exists) {
+              processedHistory.push({
+                scheduleId: String(scheduleId),
+                studentName: studentName || "Unknown",
+                timestamp: new Date().toISOString()
+              });
+              await chrome.storage.local.set({ processedHistory });
+            }
+          }
+
         } else {
           progress.failed++;
           logEntry = {
