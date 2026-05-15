@@ -2,7 +2,7 @@
 // Injected into Exxat One pages. Handles recording and replay.
 // Rebuilt to match the actual Exxat One workflow observed in screenshots.
 
-console.log("[Exxat Downloader] content.js v2.5 loaded on", window.location.href);
+console.log("[Exxat Downloader] content.js v2.6 loaded on", window.location.href);
 
 // ---------------------------------------------------------------------------
 // State
