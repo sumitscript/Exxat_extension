@@ -2,7 +2,7 @@
 // Injected into Exxat One pages. Handles recording and replay.
 // Rebuilt to match the actual Exxat One workflow observed in screenshots.
 
-console.log("[Exxat Downloader] content.js loaded on", window.location.href);
+console.log("[Exxat Downloader] content.js v2.5 loaded on", window.location.href);
 
 // ---------------------------------------------------------------------------
 // State
@@ -765,14 +765,6 @@ async function runReplaySession(steps) {
   mode = "IDLE";
   stopKeepalive();
   try { await chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }); } catch (_) {}
-  console.log("[Exxat:REPLAY] 🏁 Session ended. Progress:", progress);
-}
-  stopKeepalive();
-
-  try {
-    await chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" });
-  } catch (_) {}
-
   console.log("[Exxat:REPLAY] 🏁 Session ended. Progress:", progress);
 }
 
