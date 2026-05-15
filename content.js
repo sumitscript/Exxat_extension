@@ -268,12 +268,20 @@ function getOnboardingStatus(row) {
 }
 
 /**
- * Returns all visible data rows from the current page table.
+ * Returns all visible student rows from the list page table.
+ * ONLY works on the list page — returns empty array on detail pages.
  * @returns {Element[]}
  */
 function getTableRows() {
+  // Only run on the list page — detail page URL contains /assignments/{24-char-hex}
+  if (/\/assignments\/[a-f0-9]{24}/.test(window.location.href)) {
+    console.warn("[Exxat:ROWS] On detail page — getTableRows() returning empty");
+    return [];
+  }
+
+  // Standard HTML table rows (the list page uses a <table>)
   const tableRows = Array.from(
-    document.querySelectorAll("table tbody tr, table tr")
+    document.querySelectorAll("table tbody tr")
   ).filter((row) => {
     const cells = Array.from(row.children);
     if (cells.length === 0) return false;
@@ -288,22 +296,7 @@ function getTableRows() {
     return tableRows;
   }
 
-  // ARIA rows fallback
-  const ariaRows = Array.from(
-    document.querySelectorAll('[role="row"], [role="listitem"]')
-  ).filter((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    if ((el.textContent || "").trim().length === 0) return false;
-    return true;
-  });
-
-  if (ariaRows.length > 0) {
-    console.log(`[Exxat:ROWS] Found ${ariaRows.length} ARIA rows`);
-    return ariaRows;
-  }
-
-  console.warn("[Exxat:ROWS] No rows found");
+  console.warn("[Exxat:ROWS] No table rows found on list page");
   return [];
 }
 
@@ -418,37 +411,50 @@ async function downloadAllDocumentsOnDetailPage() {
     if (stopReplayRequested) break;
 
     const row = requirementRows[i];
-    const nameEl = row.querySelector("span.text-sm.text-gray-900, span[class*='text-sm'][class*='text-gray']");
+
+    // Get requirement name — it's in a span inside the row
+    // From screenshot: "Carry Forward - Epic Request Form", "Tuberculosis (TB)", etc.
+    const spans = Array.from(row.querySelectorAll("span, p, div"));
+    const nameEl = spans.find((el) => {
+      const t = (el.textContent || "").trim();
+      // Name spans have meaningful text, not just status words
+      return t.length > 5 &&
+        !["get started", "pending review", "compliant", "not started", "due: na", "due:"].includes(t.toLowerCase()) &&
+        el.children.length === 0; // leaf node
+    });
     const name = nameEl ? nameEl.textContent.trim() : `Requirement ${i + 1}`;
 
-    // Find the download button: button.px-3.min-w-[32px] inside this row
-    // This is the left-side ↓ icon button confirmed from recording logs.
-    // It is DISABLED (greyed out) when no file is available — skip those.
-    const btn = row.querySelector("button.px-3") ||
-                row.querySelector("button[class*='px-3']");
+    // The ↓ download button is the only button inside this requirement row.
+    // From recording: button.px-3.min-w-[32px]
+    // It contains an SVG icon (no text). When no file is available, the site
+    // shows a 🚫 icon instead — the button itself may still be in the DOM
+    // but React marks it disabled or with pointer-events:none.
+    const btn = row.querySelector("button");
 
     if (!btn) {
-      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — no button found, skipping`);
+      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — no button, skipping`);
       continue;
     }
 
-    // Check if disabled — greyed out means no file available
-    const isDisabled = btn.disabled ||
+    // Disabled check — covers all the ways Exxat marks a button as unavailable
+    const computedStyle = window.getComputedStyle(btn);
+    const isDisabled =
+      btn.disabled ||
       btn.getAttribute("disabled") !== null ||
       btn.getAttribute("aria-disabled") === "true" ||
-      btn.classList.contains("disabled") ||
-      window.getComputedStyle(btn).opacity < 0.5 ||
-      window.getComputedStyle(btn).pointerEvents === "none";
+      computedStyle.pointerEvents === "none" ||
+      computedStyle.cursor === "not-allowed" ||
+      parseFloat(computedStyle.opacity) < 0.5;
 
     if (isDisabled) {
-      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — button disabled (no file), skipping`);
+      console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — disabled (no file), skipping`);
       continue;
     }
 
-    console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — clicking download ↓`);
+    console.log(`[Exxat:DETAIL] Req ${i + 1}: "${name}" — clicking ↓`);
     btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     downloaded++;
-    await sleep(1200); // wait for download to initiate
+    await sleep(1500); // give the browser time to trigger the download
   }
 
   console.log(`[Exxat:DETAIL] Done — ${downloaded}/${requirementRows.length} downloaded`);
@@ -467,43 +473,57 @@ async function downloadAllDocumentsOnDetailPage() {
  * @returns {Element[]}
  */
 function getRequirementItems() {
-  // Confirmed from recording logs: each requirement row is div.mb-2.flex
-  // (Tailwind classes mb-2 + flex). The recording showed:
-  //   div.mb-2.flex:nth-of-type(1) > div.flex.flex-col:nth-of-type(2) > button.px-3.min-w-[32px]
-  // meaning the container IS div.mb-2.flex.
+  // Each requirement row on the detail page is a div.mb-2.flex containing:
+  //   - A span/div with the requirement name (e.g. "Carry Forward - Epic Request Form")
+  //   - A small ↓ button (the download icon)
+  //   - A status text ("Get Started", "Pending Review", etc.)
+  //
+  // We identify them by: div.mb-2.flex that contains BOTH a button AND
+  // a status text ("get started", "pending review", etc.)
+
+  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started"];
 
   const rows = Array.from(document.querySelectorAll("div.mb-2.flex")).filter((el) => {
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden") return false;
-    // Must contain a button (the download icon) — this distinguishes requirement
-    // rows from other div.mb-2.flex elements on the page
-    const btn = el.querySelector("button");
-    if (!btn) return false;
-    // Must contain some text (the requirement name)
+    // Must have a button (the ↓ download icon)
+    if (!el.querySelector("button")) return false;
+    // Must contain a status word — this distinguishes requirement rows
+    // from other div.mb-2.flex elements (headers, etc.)
+    const text = (el.textContent || "").trim().toLowerCase();
+    return STATUS_WORDS.some((s) => text.includes(s));
+  });
+
+  if (rows.length > 0) {
+    console.log(`[Exxat:DETAIL] Found ${rows.length} requirement rows`);
+    return rows;
+  }
+
+  // Fallback: find by button.px-3 and walk up to the containing row
+  const btns = Array.from(document.querySelectorAll("button.px-3, button[class*='px-3']"));
+  const containers = btns.map((btn) => {
+    // Walk up max 4 levels to find a container with status text
+    let el = btn.parentElement;
+    for (let i = 0; i < 4; i++) {
+      if (!el) break;
+      const text = (el.textContent || "").toLowerCase();
+      if (STATUS_WORDS.some((s) => text.includes(s))) return el;
+      el = el.parentElement;
+    }
+    return btn.closest("div.mb-2") || btn.parentElement?.parentElement;
+  }).filter(Boolean);
+
+  const unique = [...new Set(containers)].filter((el) => {
     const text = (el.textContent || "").trim();
     return text.length > 3;
   });
 
-  if (rows.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${rows.length} requirement rows (div.mb-2.flex)`);
-    return rows;
-  }
-
-  // Fallback: find by the button selector pattern from the recording
-  // button.px-3.min-w-[32px] is unique to requirement rows
-  const byButton = Array.from(document.querySelectorAll("button.px-3")).map((btn) => {
-    // Walk up to find the containing requirement row
-    return btn.closest("div.mb-2") || btn.closest("div[class*='mb-2']") || btn.parentElement?.parentElement;
-  }).filter((el) => el && (el.textContent || "").trim().length > 3);
-
-  // Deduplicate
-  const unique = [...new Set(byButton)];
   if (unique.length > 0) {
-    console.log(`[Exxat:DETAIL] Found ${unique.length} requirement rows (button.px-3 fallback)`);
+    console.log(`[Exxat:DETAIL] Found ${unique.length} requirement rows (fallback)`);
     return unique;
   }
 
-  console.warn("[Exxat:DETAIL] No requirement rows found — page may not have loaded yet");
+  console.warn("[Exxat:DETAIL] No requirement rows found");
   return [];
 }
 
@@ -624,31 +644,38 @@ async function runReplaySession(steps) {
   mode = "REPLAYING";
   startKeepalive();
 
-  const listPageUrl = window.location.href;
-  console.log(`[Exxat:REPLAY] 🚀 Session STARTED. List page: ${listPageUrl}`);
-  console.log(`[Exxat:REPLAY] Recorded steps available: ${steps.length}`);
+  const currentUrl = window.location.href;
+  console.log(`[Exxat:REPLAY] 🚀 Session STARTED on: ${currentUrl}`);
 
-  // Decide mode: if steps were recorded, use them; otherwise use built-in engine
-  const useRecordedSteps = steps.length > 0;
-  if (useRecordedSteps) {
-    console.log("[Exxat:REPLAY] Using RECORDED STEPS mode");
-  } else {
-    console.log("[Exxat:REPLAY] Using BUILT-IN EXXAT ENGINE mode");
+  // GUARD: Must be started from the list page.
+  // The list page URL contains "/assignments/list".
+  // If started from a detail page (/assignments/{id}), refuse and tell the user.
+  if (!currentUrl.includes("/assignments/list")) {
+    console.error("[Exxat:REPLAY] ❌ Not on the list page. Please navigate to the Schedules List page first.");
+    mode = "IDLE";
+    stopKeepalive();
+    try {
+      await chrome.runtime.sendMessage({
+        action: "SESSION_INTERRUPTED",
+        reason: "Please navigate to the Schedules List page (/assignments/list) before starting replay."
+      });
+    } catch (_) {}
+    return;
   }
 
+  const listPageUrl = currentUrl;
   const progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
   let pageIndex = 0;
 
   while (true) {
     if (stopReplayRequested) break;
 
-    // Make sure we're on the list page
-    if (!window.location.href.includes("/assignments/list") &&
-        !window.location.href.includes("/assignments") &&
-        pageIndex > 0) {
-      console.warn("[Exxat:REPLAY] Not on list page — navigating back");
+    // Verify we're still on the list page before reading rows
+    if (!window.location.href.includes("/assignments/list")) {
+      console.warn("[Exxat:REPLAY] Drifted off list page — navigating back");
       window.history.back();
-      await sleep(2000);
+      await sleep(2500);
+      try { await waitForElement("table tbody tr", 8000); } catch (_) {}
     }
 
     const rows = getTableRows();
@@ -670,48 +697,35 @@ async function runReplaySession(steps) {
       const onboardingStatus = getOnboardingStatus(row);
       console.log(`[Exxat:REPLAY] Row ${i + 1}/${rows.length}: "${studentId}" status="${onboardingStatus}"`);
 
-      // Skip rows that don't need action
       if (SKIP_STATUSES.includes(onboardingStatus.toLowerCase())) {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (${onboardingStatus})`);
         progress.skipped++;
         await sendLogEntry({
-          rowIndex: pageIndex * rows.length + i,
-          studentId,
-          status: "skipped",
-          reason: `Onboarding Status: ${onboardingStatus}`,
+          rowIndex: pageIndex * rows.length + i, studentId,
+          status: "skipped", reason: `Onboarding Status: ${onboardingStatus}`,
           timestamp: new Date().toISOString(),
         });
         await sendProgressUpdate({ ...progress });
         continue;
       }
 
-      // Process this row
       let logEntry;
       try {
-        let result;
-        if (useRecordedSteps) {
-          result = await replayRowWithSteps(row, steps, listPageUrl);
-        } else {
-          result = await replayRowBuiltIn(row, listPageUrl);
-        }
+        const result = await replayRowBuiltIn(row, listPageUrl);
 
         if (result.success) {
           progress.processed++;
           logEntry = {
-            rowIndex: pageIndex * rows.length + i,
-            studentId,
-            status: "processed",
-            reason: `Downloaded ${result.downloaded || 0} document(s)`,
+            rowIndex: pageIndex * rows.length + i, studentId,
+            status: "processed", reason: `Downloaded ${result.downloaded || 0} document(s)`,
             timestamp: new Date().toISOString(),
           };
           console.log(`[Exxat:REPLAY]   ✅ PROCESSED — ${result.downloaded || 0} downloads`);
         } else {
           progress.failed++;
           logEntry = {
-            rowIndex: pageIndex * rows.length + i,
-            studentId,
-            status: "failed",
-            reason: result.reason || "Unknown failure",
+            rowIndex: pageIndex * rows.length + i, studentId,
+            status: "failed", reason: result.reason || "Unknown failure",
             timestamp: new Date().toISOString(),
           };
           console.error(`[Exxat:REPLAY]   ❌ FAILED: ${result.reason}`);
@@ -719,33 +733,26 @@ async function runReplaySession(steps) {
       } catch (err) {
         progress.failed++;
         logEntry = {
-          rowIndex: pageIndex * rows.length + i,
-          studentId,
-          status: "failed",
-          reason: err.message,
+          rowIndex: pageIndex * rows.length + i, studentId,
+          status: "failed", reason: err.message,
           timestamp: new Date().toISOString(),
         };
         console.error(`[Exxat:REPLAY]   ❌ ERROR: ${err.message}`);
-
-        // Try to get back to the list page after an error
-        try {
-          if (!window.location.href.includes("/assignments/list")) {
-            window.history.back();
-            await sleep(2000);
-          }
-        } catch (_) {}
+        // Try to recover back to list page
+        if (!window.location.href.includes("/assignments/list")) {
+          window.history.back();
+          await sleep(2500);
+          try { await waitForElement("table tbody tr", 6000); } catch (_) {}
+        }
       }
 
       await sendLogEntry(logEntry);
       await sendProgressUpdate({ ...progress });
-
-      // Small pause between rows
-      await sleep(500);
+      await sleep(300);
     }
 
     if (stopReplayRequested) break;
 
-    // Try to go to next page
     const advanced = await clickNextPage();
     if (!advanced) {
       console.log("[Exxat:REPLAY] 🏁 No Next button — session complete");
@@ -756,6 +763,10 @@ async function runReplaySession(steps) {
   }
 
   mode = "IDLE";
+  stopKeepalive();
+  try { await chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }); } catch (_) {}
+  console.log("[Exxat:REPLAY] 🏁 Session ended. Progress:", progress);
+}
   stopKeepalive();
 
   try {
@@ -842,12 +853,14 @@ async function ensureOnboardingTab() {
 async function navigateBackToList(listPageUrl) {
   console.log("[Exxat:REPLAY] Navigating back to list page");
 
-  // Confirmed from recording: breadcrumb is a.link-text with text "Schedules and onboarding"
-  const breadcrumb = Array.from(document.querySelectorAll("a.link-text, a[class*='link-text']"))
-    .find((el) => (el.textContent || "").trim().toLowerCase().includes("schedules and onboarding"));
+  // Best approach for this React SPA: click the "Schedules and onboarding"
+  // breadcrumb link. From screenshots it's clearly visible at the top.
+  // Selector confirmed from recording: a.link-text with that text.
+  const breadcrumb = Array.from(document.querySelectorAll("a"))
+    .find((el) => (el.textContent || "").trim().toLowerCase() === "schedules and onboarding");
 
   if (breadcrumb) {
-    console.log("[Exxat:REPLAY] Clicking breadcrumb:", breadcrumb.textContent.trim());
+    console.log("[Exxat:REPLAY] Clicking breadcrumb: Schedules and onboarding");
     const beforeUrl = window.location.href;
     breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     try {
@@ -856,20 +869,20 @@ async function navigateBackToList(listPageUrl) {
       console.log("[Exxat:REPLAY] Back on list page ✅");
       return;
     } catch (_) {
-      console.warn("[Exxat:REPLAY] Breadcrumb navigation did not complete cleanly");
+      console.warn("[Exxat:REPLAY] Breadcrumb click did not navigate — trying history.back()");
     }
   }
 
-  // Fallback: history.back()
+  // Fallback: history.back() — safe for React SPA, no full reload
   console.log("[Exxat:REPLAY] Using history.back()");
-  const beforeUrl2 = window.location.href;
+  const beforeUrl = window.location.href;
   window.history.back();
   try {
-    await waitForNavigation(beforeUrl2, 8000);
+    await waitForNavigation(beforeUrl, 8000);
     await waitForElement("table tbody tr", 8000);
-    console.log("[Exxat:REPLAY] Back on list page via history.back() ✅");
+    console.log("[Exxat:REPLAY] Back on list page ✅");
   } catch (_) {
-    console.warn("[Exxat:REPLAY] Could not confirm return to list page");
+    console.warn("[Exxat:REPLAY] Could not confirm return to list page — continuing anyway");
     await sleep(2000);
   }
 }

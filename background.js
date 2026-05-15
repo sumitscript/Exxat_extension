@@ -371,9 +371,12 @@ async function handleMessage(message, sender) {
     }
 
     case "SESSION_INTERRUPTED": {
-      // Tab closed or navigated away (Requirement 6.4)
+      // Tab closed, navigated away, or started from wrong page (Requirement 6.4)
       state.mode = "IDLE";
       state.interrupted = true;
+      if (message.reason) {
+        state.storageError = message.reason;
+      }
       activeTabId = null;
       broadcastStatus();
       return { ok: true };
