@@ -386,10 +386,14 @@ function clickRowToOpenDetail(row) {
 async function downloadAllDocumentsOnDetailPage() {
   console.log("[Exxat:DETAIL] Starting on", window.location.href);
 
-  // Wait for React to render the requirements list
-  for (let i = 0; i < 5; i++) {
-    await sleep(800);
-    if (document.body.innerText.includes("Due:")) break;
+  // Wait for React to render the requirements list and download icons
+  for (let i = 0; i < 10; i++) {
+    await sleep(1000);
+    if (document.body.innerText.includes("Due:")) {
+      // Extra wait for the icons to fully load and enable
+      await sleep(3000);
+      break;
+    }
   }
 
   const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
@@ -431,20 +435,6 @@ async function downloadAllDocumentsOnDetailPage() {
     if (btn && !processedButtons.has(btn)) {
       processedButtons.add(btn);
       total++;
-      
-      const computedStyle = window.getComputedStyle(btn);
-      const isDisabled =
-        btn.disabled ||
-        btn.getAttribute("disabled") !== null ||
-        btn.getAttribute("aria-disabled") === "true" ||
-        computedStyle.pointerEvents === "none" ||
-        computedStyle.cursor === "not-allowed" ||
-        parseFloat(computedStyle.opacity) < 0.5;
-
-      if (isDisabled) {
-        console.log(`[Exxat:DETAIL] Requirement download button disabled, skipping`);
-        continue;
-      }
       
       console.log(`[Exxat:DETAIL] Clicking download button`);
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -646,7 +636,10 @@ async function runReplaySession() {
 
       await sendLogEntry(logEntry);
       await sendProgressUpdate({ ...progress });
-      await sleep(300);
+      // Wait for React to fully hydrate the list page before clicking the next row.
+      // If we click too early, the <a> tag won't have its SPA onClick handler yet,
+      // which causes a full page reload and breaks the script.
+      await sleep(3500);
     }
 
     if (stopReplayRequested) break;
