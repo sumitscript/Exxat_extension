@@ -341,6 +341,7 @@ function clickRowToOpenDetail(row) {
   });
   if (detailLink) {
     console.log("[Exxat:NAV] Clicking detail link:", detailLink.getAttribute("href"));
+    detailLink.click();
     detailLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
   }
@@ -351,6 +352,7 @@ function clickRowToOpenDetail(row) {
   const statusLink = row.querySelector("a.flex, a[class*='flex']");
   if (statusLink) {
     console.log("[Exxat:NAV] Clicking flex link:", statusLink.textContent.trim().slice(0, 50));
+    statusLink.click();
     statusLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
   }
@@ -359,12 +361,14 @@ function clickRowToOpenDetail(row) {
   const statusCell = row.querySelector("div.min-w-0.py-3, td div[class*='py-3']");
   if (statusCell) {
     console.log("[Exxat:NAV] Clicking status cell div");
+    statusCell.click();
     statusCell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
   }
 
   // Strategy 4: click the row itself
   console.log("[Exxat:NAV] Clicking row directly");
+  row.click();
   row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   return true;
 }
@@ -389,7 +393,7 @@ async function downloadAllDocumentsOnDetailPage() {
   // Wait for React to render the requirements list and download icons
   for (let i = 0; i < 10; i++) {
     await sleep(1000);
-    if (document.body.innerText.includes("Due:")) {
+    if (/due:/i.test(document.body.innerText)) {
       // Extra wait for the icons to fully load and enable
       await sleep(3000);
       break;
@@ -398,13 +402,16 @@ async function downloadAllDocumentsOnDetailPage() {
 
   const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
   
-  // Find all elements that have text matching a status word exactly, or starting with "Due:"
-  const allLeafs = Array.from(document.querySelectorAll("*")).filter(el => el.children.length === 0 && (el.textContent||"").trim().length > 0);
-  
-  const indicatorEls = allLeafs.filter(el => {
-    const t = (el.textContent || "").trim().toLowerCase();
-    return STATUS_WORDS.includes(t) || t.startsWith("due:");
-  });
+  // Find all text nodes that match a status word exactly, or start with "Due:"
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+  const indicatorEls = [];
+  let node;
+  while (node = walker.nextNode()) {
+    const t = node.nodeValue.trim().toLowerCase();
+    if (STATUS_WORDS.includes(t) || t.startsWith("due:")) {
+      indicatorEls.push(node.parentElement);
+    }
+  }
   
   let downloaded = 0;
   let total = 0;
@@ -437,6 +444,7 @@ async function downloadAllDocumentsOnDetailPage() {
       total++;
       
       console.log(`[Exxat:DETAIL] Clicking download button`);
+      btn.click();
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       downloaded++;
       await sleep(1500); // Wait for download to trigger
@@ -736,14 +744,22 @@ async function ensureOnboardingTab() {
 async function navigateBackToList(listPageUrl) {
   console.log("[Exxat:REPLAY] Navigating back to list page");
 
-  // Approach 1: Click the "Schedules and onboarding" breadcrumb link
-  const allLeafs = Array.from(document.querySelectorAll("*")).filter(el => el.children.length === 0);
-  const breadcrumb = allLeafs.find((el) => (el.textContent || "").trim().toLowerCase() === "schedules and onboarding");
+  // Approach 1: Click the "Schedules and onboarding" breadcrumb link using TreeWalker
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+  let breadcrumb = null;
+  let node;
+  while (node = walker.nextNode()) {
+    if (node.nodeValue.trim().toLowerCase() === "schedules and onboarding") {
+      breadcrumb = node.parentElement;
+      break;
+    }
+  }
 
   if (breadcrumb) {
     console.log("[Exxat:REPLAY] Clicking breadcrumb: Schedules and onboarding");
-    const clickable = breadcrumb.closest("a, button") || breadcrumb;
+    const clickable = breadcrumb.closest("a, button, [role='button']") || breadcrumb;
     const beforeUrl = window.location.href;
+    clickable.click();
     clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     try {
       await waitForNavigation(beforeUrl, 8000);
