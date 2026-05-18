@@ -249,6 +249,31 @@ async function handleMessage(message, sender) {
       return { ok: true, stepCount: state.steps.length };
     }
 
+
+
+    // -----------------------------------------------------------------------
+    case "EXECUTE_RECORDED": {
+      console.log("[Exxat:BG] EXECUTE_RECORDED received, tabId:", message.tabId);
+      if (state.mode !== "IDLE") {
+        return { ok: false, error: `Cannot execute in mode: ${state.mode}` };
+      }
+      const replayTabId = message.tabId || (await getActiveTab())?.id;
+      if (!replayTabId) return { ok: false, error: "No active tab found." };
+      activeTabId = replayTabId;
+      state.mode = "REPLAYING"; // Uses the same mode UI
+      state.sessionLog = [];
+      state.progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
+      state.interrupted = false;
+      currentDownloadFolder = null;
+      chrome.storage.local.set({ extensionMode: "REPLAYING", currentDownloadFolder: null });
+
+      // Pass the recorded steps to the macro runner
+      await forwardToContent({ action: "EXECUTE_RECORDED", steps: state.steps }, activeTabId);
+      console.log("[Exxat:BG] EXECUTE_RECORDED forwarded");
+      broadcastStatus();
+      return { ok: true };
+    }
+
     // -----------------------------------------------------------------------
     case "START_REPLAY": {
       console.log("[Exxat:BG] START_REPLAY received, tabId:", message.tabId);

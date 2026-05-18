@@ -13,6 +13,7 @@ const storageErrorEl     = document.getElementById("storage-error");
 const btnStartRecord     = document.getElementById("btn-start-record");
 const btnStopRecord      = document.getElementById("btn-stop-record");
 const btnStartReplay     = document.getElementById("btn-start-replay");
+const btnExecuteRecorded = document.getElementById("btn-execute-recorded");
 const btnStopReplay      = document.getElementById("btn-stop-replay");
 const btnClear           = document.getElementById("btn-clear");
 const btnExport          = document.getElementById("btn-export");
@@ -81,7 +82,14 @@ function render(payload) {
   btnStartRecord.style.display  = mode === "IDLE"       ? "" : "none";
   btnStopRecord.style.display   = mode === "RECORDING"  ? "" : "none";
   btnStartReplay.style.display  = mode === "IDLE"       ? "" : "none";
+  
+  // Only show "Execute Recorded Steps" if there are recorded steps and we're idle
+  btnExecuteRecorded.style.display = (mode === "IDLE" && (stepCount || 0) > 0) ? "" : "none";
+  
   btnStopReplay.style.display   = mode === "REPLAYING"  ? "" : "none";
+  
+  // Show "Clear Steps" if there are recorded steps and we're idle
+  btnClear.style.display = (mode === "IDLE" && (stepCount || 0) > 0) ? "" : "none";
 
   // Hide CSV upload and template stuff during replay
   const isIdle = mode === "IDLE";
@@ -162,6 +170,11 @@ btnStartReplay.addEventListener("click", () => {
   sendAndRefresh("START_REPLAY");
 });
 
+btnExecuteRecorded.addEventListener("click", () => {
+  summarySection.classList.remove("visible");
+  sendAndRefresh("EXECUTE_RECORDED");
+});
+
 btnStopReplay.addEventListener("click", () => {
   sendAndRefresh("STOP_REPLAY");
 });
@@ -187,17 +200,46 @@ btnExport.addEventListener("click", () => {
  * @param {object[]} log
  */
 function downloadCsv(log) {
-  const headers = ["rowIndex", "studentId", "status", "reason", "timestamp"];
-  const rows = log.map((e) =>
-    headers.map((h) => JSON.stringify(e[h] ?? "")).join(",")
-  );
+  const headers = [
+    "Schedule ID", "File Name", "Source / Target", "Download Date", 
+    "Download Time", "Execution Status", "Detailed Failure Reason", 
+    "Skip Reason", "Retry Count", "Execution Duration", 
+    "Storage Path", "Duplicate Detection Result", "CSV Mapping Details", "Trigger Source"
+  ];
+  
+  const rows = log.map((item) => {
+    const id = item.scheduleId || item.studentId || "";
+    const dateStr = item.timestamp ? item.timestamp.split('T')[0] : "";
+    const timeStr = item.timestamp ? item.timestamp.split('T')[1].replace('Z','') : "";
+    
+    const isSkip = item.status?.toUpperCase() === "SKIPPED";
+    const isFail = item.status?.toUpperCase() === "FAILED";
+    
+    return [
+      `"${id}"`,
+      `"Multiple Documents"`,
+      `"Exxat List"`,
+      `"${dateStr}"`,
+      `"${timeStr}"`,
+      `"${item.status || "UNKNOWN"}"`,
+      `"${isFail ? (item.reason || "").replace(/"/g, '""') : ""}"`,
+      `"${isSkip ? (item.reason || "").replace(/"/g, '""') : ""}"`,
+      `"1"`,
+      `""`,
+      `"Exxat_Downloads/${id}"`,
+      `"${isSkip && item.reason && item.reason.includes('already') ? 'Duplicate' : 'Passed'}"`,
+      `"Mapped"`,
+      `"Automated"`
+    ].join(",");
+  });
+
   const csv = [headers.join(","), ...rows].join("\n");
 
   const blob = new Blob([csv], { type: "text/csv" });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement("a");
   a.href     = url;
-  a.download = `exxat-log-${Date.now()}.csv`;
+  a.download = `Exxat_Execution_Log_${Date.now()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -316,11 +358,24 @@ btnExportHistory.addEventListener("click", () => {
     const history = res.processedHistory || [];
     if (history.length === 0) return;
     
-    // Support string arrays or objects mapping to CSV
-    const headers = ["Schedule ID", "Timestamp"];
+    // Detailed logs for history
+    const headers = [
+      "Schedule ID", "File Name", "Source / Target", "Download Date", 
+      "Download Time", "Execution Status", "Detailed Failure Reason", 
+      "Skip Reason", "Retry Count", "Execution Duration", 
+      "Storage Path", "Duplicate Detection Result", "CSV Mapping Details", "Trigger Source"
+    ];
+    
     const rows = history.map(item => {
-      if (typeof item === "string") return `"${item}",""`;
-      return `"${item.id || item.scheduleId || ''}","${item.timestamp || ''}"`;
+      if (typeof item === "string") return `"${item}","","","","","SUCCESS","","","","","","","",""`;
+      
+      const id = item.scheduleId || item.id || "";
+      const dateStr = item.timestamp ? item.timestamp.split('T')[0] : "";
+      const timeStr = item.timestamp ? item.timestamp.split('T')[1].replace('Z','') : "";
+      const status = item.status || "SUCCESS";
+      const reason = item.reason || "";
+      
+      return `"${id}","Multiple Documents","Exxat List","${dateStr}","${timeStr}","${status}","${reason}","","1","","Exxat_Downloads/${id}","Passed","Mapped","Automated"`;
     });
     
     const csvContent = [headers.join(","), ...rows].join("\n");

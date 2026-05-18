@@ -323,12 +323,12 @@ function extractScheduleId(row) {
   const cells = Array.from(row.querySelectorAll("td"));
   for (const cell of cells) {
     const text = cell.textContent.trim();
-    if (/^\d{6,12}$/.test(text)) {
+    if (/^\d{5,15}$/.test(text)) {
       return text;
     }
   }
   // Try finding anywhere in text if not isolated in a cell
-  const match = row.textContent.match(/\b\d{8}\b/);
+  const match = row.textContent.match(/\b\d{5,15}\b/);
   return match ? match[0] : null;
 }
 
@@ -691,8 +691,8 @@ async function runReplaySession() {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (${onboardingStatus})`);
         progress.skipped++;
         await sendLogEntry({
-          rowIndex: pageIndex * initialRows.length + i, studentId,
-          status: "skipped", reason: `Onboarding Status: ${onboardingStatus}`,
+          rowIndex: pageIndex * initialRows.length + i, studentId, scheduleId,
+          status: "SKIPPED", reason: `Onboarding Status: ${onboardingStatus}`,
           timestamp: new Date().toISOString(),
         });
         await sendProgressUpdate({ ...progress });
@@ -700,9 +700,10 @@ async function runReplaySession() {
       }
 
       let logEntry;
+      const startTime = Date.now();
       try {
         // Set the Subfolder for downloads in the Background Worker
-        const folderName = `Exxat_Downloads/${scheduleId || 'UnknownID'}_${studentName || 'UnknownName'}`;
+        const folderName = `Exxat_Downloads/${scheduleId || 'UnknownID'}`;
         await chrome.runtime.sendMessage({ action: "SET_DOWNLOAD_FOLDER", folder: folderName });
 
         // Download the Metadata file directly using a blob
@@ -727,8 +728,8 @@ async function runReplaySession() {
         if (result.success) {
           progress.processed++;
           logEntry = {
-            rowIndex: pageIndex * initialRows.length + i, studentId,
-            status: "processed", reason: `Downloaded ${result.downloaded || 0} document(s)`,
+            rowIndex: pageIndex * initialRows.length + i, studentId, scheduleId,
+            status: "SUCCESS", reason: `Downloaded ${result.downloaded || 0} document(s)`,
             timestamp: new Date().toISOString(),
           };
           console.log(`[Exxat:REPLAY]   ✅ PROCESSED — ${result.downloaded || 0} downloads`);
@@ -752,17 +753,18 @@ async function runReplaySession() {
         } else {
           progress.failed++;
           logEntry = {
-            rowIndex: pageIndex * initialRows.length + i, studentId,
-            status: "failed", reason: result.reason || "Unknown failure",
+            rowIndex: pageIndex * initialRows.length + i, studentId, scheduleId,
+            status: "FAILED", reason: result.reason || "Unknown failure",
             timestamp: new Date().toISOString(),
           };
           console.error(`[Exxat:REPLAY]   ❌ FAILED: ${result.reason}`);
         }
       } catch (err) {
+        console.error("[Exxat:REPLAY] Error processing row:", err);
         progress.failed++;
         logEntry = {
-          rowIndex: pageIndex * initialRows.length + i, studentId,
-          status: "failed", reason: err.message,
+          rowIndex: pageIndex * initialRows.length + i, studentId, scheduleId,
+          status: "FAILED", reason: err.message,
           timestamp: new Date().toISOString(),
         };
         console.error(`[Exxat:REPLAY]   ❌ ERROR: ${err.message}`);
@@ -1115,12 +1117,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
 
     case "START_REPLAY": {
-      // Always use the built-in engine — recorded steps are too fragile
-      // for this React app (dynamic selectors, SVG paths, row-specific class paths).
-      // Also force-clear any stored steps so the popup doesn't gray out.
+      // Always use the built-in engine for Start Auto-Engine
       sendResponse({ ok: true });
       runReplaySession().catch((err) => {
         console.error("[Exxat] runReplaySession error:", err);
+        chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
+      });
+      break;
+    }
+
+    case "EXECUTE_RECORDED": {
+      // Use the macro execution engine for recorded steps
+      sendResponse({ ok: true });
+      runMacroReplaySession(message.steps).catch((err) => {
+        console.error("[Exxat] runMacroReplaySession error:", err);
         chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
       });
       break;
