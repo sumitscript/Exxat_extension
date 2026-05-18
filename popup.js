@@ -13,6 +13,7 @@ const storageErrorEl     = document.getElementById("storage-error");
 const btnStartRecord     = document.getElementById("btn-start-record");
 const btnStopRecord      = document.getElementById("btn-stop-record");
 const btnStartReplay     = document.getElementById("btn-start-replay");
+const btnStartGroup      = document.getElementById("btn-start-group");
 const btnExecuteRecorded = document.getElementById("btn-execute-recorded");
 const btnStopReplay      = document.getElementById("btn-stop-replay");
 const btnClear           = document.getElementById("btn-clear");
@@ -82,8 +83,11 @@ function render(payload) {
   btnStartRecord.style.display  = mode === "IDLE"       ? "" : "none";
   btnStopRecord.style.display   = mode === "RECORDING"  ? "" : "none";
   btnStartReplay.style.display  = mode === "IDLE"       ? "" : "none";
+  btnStartGroup.style.display   = mode === "IDLE"       ? "" : "none";
   
-  // Only show "Execute Recorded Steps" if there are recorded steps and we're idle
+  // Disable Start buttons only if there's a storage error
+  btnStartReplay.disabled = !!storageError;
+  btnStartGroup.disabled = !!storageError;
   btnExecuteRecorded.style.display = (mode === "IDLE" && (stepCount || 0) > 0) ? "" : "none";
   
   btnStopReplay.style.display   = mode === "REPLAYING"  ? "" : "none";
@@ -101,9 +105,6 @@ function render(payload) {
   } else {
     targetInfoWrapper.style.display = "none";
   }
-
-  // Disable Start Replay only if there's a storage error
-  btnStartReplay.disabled = !!storageError;
 
   // Clear / Export always visible but disabled during active sessions
   btnClear.disabled   = mode !== "IDLE";
@@ -166,8 +167,11 @@ btnStopRecord.addEventListener("click", () => {
 });
 
 btnStartReplay.addEventListener("click", () => {
-  summarySection.classList.remove("visible");
   sendAndRefresh("START_REPLAY");
+});
+
+btnStartGroup.addEventListener("click", () => {
+  sendAndRefresh("START_GROUP_REPLAY");
 });
 
 btnExecuteRecorded.addEventListener("click", () => {

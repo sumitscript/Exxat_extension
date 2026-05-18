@@ -1112,6 +1112,216 @@ async function executeStep(step) {
 }
 
 // ---------------------------------------------------------------------------
+// Group Engine
+// ---------------------------------------------------------------------------
+
+async function runGroupReplaySession() {
+  stopReplayRequested = false;
+  mode = "REPLAYING";
+  startKeepalive();
+
+  const currentUrl = window.location.href;
+  console.log(`[Exxat:GROUP] 🚀 Session STARTED on: ${currentUrl}`);
+
+  if (!currentUrl.includes("/assignments/list")) {
+    console.error("[Exxat:GROUP] ❌ Not on the list page.");
+    mode = "IDLE";
+    stopKeepalive();
+    try { await chrome.runtime.sendMessage({ action: "SESSION_INTERRUPTED", reason: "Please navigate to the Schedules List page." }); } catch (_) {}
+    return;
+  }
+
+  const listPageUrl = currentUrl;
+  const progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
+  let pageIndex = 0;
+
+  // Load target template list and processing history from storage
+  let targetScheduleIds = [];
+  let processedHistory = [];
+  try {
+    const data = await new Promise(r => chrome.storage.local.get(["targetScheduleIds", "processedHistory"], r));
+    targetScheduleIds = data.targetScheduleIds || [];
+    processedHistory = data.processedHistory || [];
+  } catch (_) {}
+
+  const targetSet = new Set(targetScheduleIds.map(String));
+  const historySet = new Set(processedHistory.map(item => typeof item === "string" ? item : String(item.scheduleId || item.id)));
+
+  while (true) {
+    if (stopReplayRequested) break;
+    if (!window.location.href.includes("/assignments/list")) {
+      window.history.back();
+      await sleep(2500);
+      continue;
+    }
+
+    // Determine how many parent group rows there are
+    let parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+    if (parentRows.length === 0) {
+      console.log("[Exxat:GROUP] No group rows found. Waiting 5s...");
+      await sleep(5000);
+      parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+      if (parentRows.length === 0) {
+        break; // No rows at all
+      }
+    }
+
+    progress.total = parentRows.length * 2; // Rough estimate
+    await sendProgressUpdate({ ...progress });
+
+    for (let i = 0; i < parentRows.length; i++) {
+      if (stopReplayRequested) break;
+
+      // Re-fetch parent row in case DOM changed
+      const currentParentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+      if (i >= currentParentRows.length) break;
+      const parentRow = currentParentRows[i];
+
+      const groupName = parentRow.querySelector("td[aria-colindex='1']")?.textContent?.trim() || 
+                        parentRow.querySelector("td[aria-colindex='2']")?.textContent?.trim() || `Group_${i+1}`;
+      console.log(`[Exxat:GROUP] Processing Group: ${groupName}`);
+
+      // Find expand icon
+      const expandIcon = parentRow.querySelector(".e-detailrowexpand, .e-detailrowcollapse");
+      if (!expandIcon) {
+        console.warn(`[Exxat:GROUP] No expand icon found for Group ${groupName}`);
+        continue;
+      }
+
+      // Expand if collapsed
+      if (expandIcon.classList.contains("e-detailrowcollapse")) {
+        expandIcon.click();
+        await sleep(3500); // Wait for inner grid to render
+      } else {
+        await sleep(500);
+      }
+
+      // Now it's expanded. The detail row is usually nextElementSibling
+      const detailRow = parentRow.nextElementSibling;
+      if (!detailRow || !detailRow.classList.contains("e-detailrow")) {
+         console.warn(`[Exxat:GROUP] Could not locate detail row for Group ${groupName}`);
+         continue;
+      }
+
+      const innerRows = Array.from(detailRow.querySelectorAll("tr.e-row:not(.e-hiddenrow)"));
+      console.log(`[Exxat:GROUP] Group ${groupName} has ${innerRows.length} slots/students`);
+
+      for (let j = 0; j < innerRows.length; j++) {
+         if (stopReplayRequested) break;
+         
+         // RE-FETCH detail row because DOM might have rebuilt if we went back!
+         const currentParentRowsInner = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+         if (i >= currentParentRowsInner.length) break;
+         const currentParentRowInner = currentParentRowsInner[i];
+         
+         // Check if it's still expanded. If we navigated back, it might have collapsed!
+         const currentExpandIcon = currentParentRowInner.querySelector(".e-detailrowexpand, .e-detailrowcollapse");
+         if (currentExpandIcon && currentExpandIcon.classList.contains("e-detailrowcollapse")) {
+            console.log(`[Exxat:GROUP] Group collapsed after navigation, re-expanding...`);
+            currentExpandIcon.click();
+            await sleep(3500);
+         }
+
+         const currentDetailRow = currentParentRowInner.nextElementSibling;
+         if (!currentDetailRow || !currentDetailRow.classList.contains("e-detailrow")) continue;
+         
+         const currentInnerRows = Array.from(currentDetailRow.querySelectorAll("tr.e-row:not(.e-hiddenrow)"));
+         if (j >= currentInnerRows.length) break;
+         
+         const studentRow = currentInnerRows[j];
+
+         // Extract data
+         const scheduleIdMatch = studentRow.innerHTML.match(/\b\d{5,15}\b/);
+         const scheduleId = scheduleIdMatch ? scheduleIdMatch[0] : null;
+         
+         // In groups, the name is usually in the 2nd column of the inner table
+         const studentInfo = studentRow.querySelector("td[aria-colindex='2']")?.textContent?.trim() || "Unknown";
+
+         console.log(`[Exxat:GROUP]   Slot ${j+1}: Student="${studentInfo}", ID="${scheduleId}"`);
+
+         // Skip Faculty if they don't have schedule ID or link
+         const link = studentRow.querySelector("a[href*='/assignments/']");
+         if (!link) {
+           console.log(`[Exxat:GROUP]     ⏭ SKIPPING (No detail link found, likely Faculty)`);
+           continue;
+         }
+
+         // Target filter
+         let isExplicitlyTargeted = false;
+         if (targetSet.size > 0 && scheduleId) {
+           if (!targetSet.has(String(scheduleId))) {
+             console.log(`[Exxat:GROUP]     ⏭ SKIPPING (Schedule ID ${scheduleId} not in target template)`);
+             continue;
+           } else {
+             isExplicitlyTargeted = true;
+           }
+         }
+
+         // Duplicate prevention
+         if (scheduleId && historySet.has(String(scheduleId))) {
+           console.log(`[Exxat:GROUP]     ⏭ SKIPPING (Schedule ID ${scheduleId} already downloaded)`);
+           continue;
+         }
+         
+         console.log(`[Exxat:GROUP]     Navigating to details for ${scheduleId || studentInfo}`);
+         
+         // Let's store the group name temporarily to subfolder logic if we want to modify it later
+         try {
+           const result = await replayRowBuiltIn(studentRow, listPageUrl);
+
+           if (result.success) {
+             progress.processed++;
+             if (scheduleId) {
+               historySet.add(String(scheduleId));
+               processedHistory.push({
+                 scheduleId: String(scheduleId),
+                 studentName: studentInfo,
+                 timestamp: new Date().toISOString(),
+                 groupName: groupName
+               });
+               await chrome.storage.local.set({ processedHistory });
+             }
+             await sendLogEntry({
+               rowIndex: j, studentId: studentInfo, scheduleId,
+               status: "SUCCESS", reason: result.message || "Completed successfully",
+               timestamp: new Date().toISOString(),
+             });
+           } else {
+             progress.failed++;
+             await sendLogEntry({
+               rowIndex: j, studentId: studentInfo, scheduleId,
+               status: "FAILED", reason: result.message || "Unknown error",
+               timestamp: new Date().toISOString(),
+             });
+           }
+           await sendProgressUpdate({ ...progress });
+         } catch (e) {
+           console.error("[Exxat:GROUP] Failed to process slot", e);
+           progress.failed++;
+         }
+      }
+    }
+
+    // Next page logic
+    const nextBtn = document.querySelector(".e-next:not(.e-disabled), .e-nextpage:not(.e-disabled)");
+    if (!nextBtn || stopReplayRequested) {
+      console.log("[Exxat:GROUP] No more pages or stopped.");
+      break;
+    }
+    console.log(`[Exxat:GROUP] Moving to page ${pageIndex + 2}`);
+    nextBtn.click();
+    pageIndex++;
+    await sleep(3500); // WAIT FOR NEXT PAGE TO LOAD
+  }
+
+  console.log("[Exxat:GROUP] ✅ Session Finished!");
+  mode = "IDLE";
+  stopKeepalive();
+  try { await chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }); } catch (_) {}
+}
+
+
+// ---------------------------------------------------------------------------
 // Message listener
 // ---------------------------------------------------------------------------
 
@@ -1136,6 +1346,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true });
       runReplaySession().catch((err) => {
         console.error("[Exxat] runReplaySession error:", err);
+        chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
+      });
+      break;
+    }
+
+    case "START_GROUP_REPLAY": {
+      sendResponse({ ok: true });
+      runGroupReplaySession().catch((err) => {
+        console.error("[Exxat] runGroupReplaySession error:", err);
         chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
       });
       break;

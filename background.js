@@ -275,6 +275,29 @@ async function handleMessage(message, sender) {
     }
 
     // -----------------------------------------------------------------------
+    case "START_GROUP_REPLAY": {
+      console.log("[Exxat:BG] START_GROUP_REPLAY received, tabId:", message.tabId);
+      if (state.mode !== "IDLE") {
+        return { ok: false, error: `Cannot execute in mode: ${state.mode}` };
+      }
+      const replayTabId = message.tabId || (await getActiveTab())?.id;
+      if (!replayTabId) return { ok: false, error: "No active tab found." };
+      activeTabId = replayTabId;
+      state.mode = "REPLAYING"; // Uses the same UI mode
+      state.sessionLog = [];
+      state.progress = { processed: 0, skipped: 0, failed: 0, total: 0 };
+      state.interrupted = false;
+      currentDownloadFolder = null;
+      chrome.storage.local.set({ extensionMode: "REPLAYING", currentDownloadFolder: null });
+
+      // Signal content script to start group replay
+      await forwardToContent({ action: "START_GROUP_REPLAY" }, activeTabId);
+      console.log("[Exxat:BG] START_GROUP_REPLAY forwarded");
+      broadcastStatus();
+      return { ok: true };
+    }
+
+    // -----------------------------------------------------------------------
     case "START_REPLAY": {
       console.log("[Exxat:BG] START_REPLAY received, tabId:", message.tabId);
       if (state.mode !== "IDLE") {
