@@ -294,6 +294,7 @@ setInterval(() => {
   chrome.runtime.sendMessage({ action: "GET_STATUS" }, (response) => {
     if (response?.payload) render(response.payload);
   });
+  loadStorageData(); // Keep memory count and history buttons fresh
 }, 1000);
 
 // ---------------------------------------------------------------------------
