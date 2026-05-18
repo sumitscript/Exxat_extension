@@ -588,7 +588,7 @@ let stopReplayRequested = false;
  *
  * @returns {Promise<void>}
  */
-async function runReplaySession() {
+async function runReplaySession(customSteps = null) {
   stopReplayRequested = false;
   mode = "REPLAYING";
   startKeepalive();
@@ -671,23 +671,33 @@ async function runReplaySession() {
       console.log(`[Exxat:REPLAY] Row ${i + 1}/${initialRows.length}: "${studentId}" ID="${scheduleId}" status="${onboardingStatus}"`);
 
       // 1. Target Template Filter
-      if (targetSet.size > 0 && scheduleId && !targetSet.has(String(scheduleId))) {
-        console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (Schedule ID ${scheduleId} not in target template)`);
-        progress.skipped++;
-        await sendProgressUpdate({ ...progress });
-        continue;
+      let isExplicitlyTargeted = false;
+      if (targetSet.size > 0 && scheduleId) {
+        if (!targetSet.has(String(scheduleId))) {
+          console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (Schedule ID ${scheduleId} not in target template)`);
+          progress.skipped++;
+          await sendProgressUpdate({ ...progress });
+          continue;
+        } else {
+          isExplicitlyTargeted = true;
+        }
       }
 
       // 2. Duplicate Prevention
       if (scheduleId && historySet.has(String(scheduleId))) {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (Schedule ID ${scheduleId} already downloaded previously)`);
         progress.skipped++;
+        await sendLogEntry({
+          rowIndex: pageIndex * initialRows.length + i, studentId, scheduleId,
+          status: "SKIPPED", reason: `Already downloaded previously`,
+          timestamp: new Date().toISOString(),
+        });
         await sendProgressUpdate({ ...progress });
         continue;
       }
 
-      // 3. Skip Status Filter
-      if (SKIP_STATUSES.includes(onboardingStatus.toLowerCase())) {
+      // 3. Skip Status Filter (Bypass if explicitly targeted)
+      if (!isExplicitlyTargeted && SKIP_STATUSES.includes(onboardingStatus.toLowerCase())) {
         console.log(`[Exxat:REPLAY]   ⏭ SKIPPING (${onboardingStatus})`);
         progress.skipped++;
         await sendLogEntry({
@@ -723,7 +733,12 @@ async function runReplaySession() {
           console.warn("[Exxat:REPLAY] Failed to download metadata CSV", e);
         }
 
-        const result = await replayRowBuiltIn(row, listPageUrl);
+        let result;
+        if (customSteps && customSteps.length > 0) {
+          result = await replayRowWithSteps(row, customSteps, listPageUrl);
+        } else {
+          result = await replayRowBuiltIn(row, listPageUrl);
+        }
 
         if (result.success) {
           progress.processed++;
@@ -1129,7 +1144,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case "EXECUTE_RECORDED": {
       // Use the macro execution engine for recorded steps
       sendResponse({ ok: true });
-      runMacroReplaySession(message.steps).catch((err) => {
+      runReplaySession(message.steps).catch((err) => {
         console.error("[Exxat] runMacroReplaySession error:", err);
         chrome.runtime.sendMessage({ action: "REPLAY_COMPLETE" }).catch(() => {});
       });
