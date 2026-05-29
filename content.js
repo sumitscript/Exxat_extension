@@ -1738,7 +1738,6 @@ function detectCandidateNameFromDOM() {
   return null;
 }
 
-// Intercept clicks to save candidate names instantly
 document.addEventListener('click', (e) => {
   const candidateRow = e.target.closest('div[aria-label^="Select student"], div[aria-label^="Select faculty"], div[aria-label^="Select "]');
   if (candidateRow) {
@@ -1751,66 +1750,69 @@ document.addEventListener('click', (e) => {
         lastDetectedCandidate = cleanName(aria.replace(/Select (student|faculty) /i, ''));
       }
     }
-    console.warn(`[Exxat:MANUAL] Clicked candidate row, saved candidate: "${lastDetectedCandidate}"`);
   }
-}, true); // Use capture to grab it early
+}, true);
 
-
-async function updateManualDownloadFolder() {
+async function updateManualDownloadFolder(clickedElement = null) {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
     if (!res.manualDownloadMode) return;
     
-    // Always update group name
     lastDetectedGroup = detectGroupName();
     
-    // Try to detect candidate from DOM, fallback to last clicked
     const domCandidate = detectCandidateNameFromDOM();
     if (domCandidate) {
       lastDetectedCandidate = domCandidate;
     }
     
+    if (clickedElement) {
+       const req = detectRequirementName(clickedElement);
+       if (req !== "General Requirement") {
+          lastDetectedRequirement = req;
+       }
+    }
+    
     const safeCandidate = lastDetectedCandidate && lastDetectedCandidate !== "General Candidates" ? lastDetectedCandidate : "General Candidates";
     const safeGroup = lastDetectedGroup && lastDetectedGroup !== "General Group" ? lastDetectedGroup : "General Group";
     
-    // The requested path: Exxat_Downloads / [Group Name] / [Candidate Name]
-    const folderPath = `Exxat_Downloads/${safeGroup}/${safeCandidate}`.replace(/\/+/g, '/');
+    const folderPath = `Exxat_Downloads/${safeGroup}/${lastDetectedRequirement}/${safeCandidate}`.replace(/\/+/g, '/');
     
-    // UI Update - if the menu is open, show the live path
     const pathEl = document.getElementById("exxat-manual-path");
     if (pathEl) {
       pathEl.innerText = folderPath;
     }
 
-    console.warn(`[Exxat:MANUAL] updateManualDownloadFolder:
-      - Group: "${safeGroup}"
-      - Candidate: "${safeCandidate}"
-      - Target Path: "${folderPath}"`);
-
-    // Set variables in storage
     chrome.storage.local.set({ 
       manualCandidate: safeCandidate,
       manualDownloadFolder: folderPath 
     });
 
-    // Send direct runtime messages to sync background service worker memory synchronously
     chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: folderPath }).catch(() => {});
     chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
+    
+    updateSecretUI(safeGroup, lastDetectedRequirement, safeCandidate, folderPath);
   });
 }
 
-// Secret Page UI injection
+function updateSecretUI(group, req, candidate, targetPath) {
+  const dataDiv = document.getElementById('exxat-secret-data');
+  if (dataDiv) {
+    dataDiv.innerHTML = `
+      Group: ${group}<br>
+      Requirement: ${req}<br>
+      Candidate: ${candidate}<br>
+      <span style="color:#4ade80; font-weight:bold; word-break: break-all;">Target Path: ${targetPath}</span>
+    `;
+  }
+}
+
 function injectPageSecretUI() {
   if (!document.body) {
     setTimeout(injectPageSecretUI, 100);
     return;
   }
 
-  // Inject everywhere we load so iframes get it too (since the dashboard is complex)
   if (document.getElementById("exxat-page-secret-dot")) return;
 
-  console.warn(`[Exxat:MANUAL] injectPageSecretUI: Injecting secret page dot menu`);
-
-  // 1. The Red Dot Button
   const dot = document.createElement("div");
   dot.id = "exxat-page-secret-dot";
   dot.title = "Open Exxat Manual Routing Menu";
@@ -1821,22 +1823,12 @@ function injectPageSecretUI() {
   dot.style.height = "16px";
   dot.style.backgroundColor = "#ef4444";
   dot.style.borderRadius = "50%";
-  dot.style.zIndex = "2147483647"; // max z-index
+  dot.style.zIndex = "2147483647";
   dot.style.cursor = "pointer";
   dot.style.boxShadow = "0 2px 5px rgba(0,0,0,0.5)";
-  dot.style.transition = "transform 0.2s, background-color 0.2s";
 
-  dot.addEventListener("mouseenter", () => {
-    dot.style.transform = "scale(1.2)";
-    dot.style.backgroundColor = "#dc2626";
-  });
-  
-  dot.addEventListener("mouseleave", () => {
-    dot.style.transform = "scale(1)";
-    dot.style.backgroundColor = "#ef4444";
-  });
+  document.body.appendChild(dot);
 
-  // 2. The Menu Panel (hidden by default)
   const menu = document.createElement("div");
   menu.id = "exxat-manual-menu";
   menu.style.position = "fixed";
@@ -1847,153 +1839,46 @@ function injectPageSecretUI() {
   menu.style.color = "#f8fafc";
   menu.style.padding = "16px";
   menu.style.borderRadius = "8px";
-  menu.style.boxShadow = "0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3)";
   menu.style.zIndex = "2147483647";
-  menu.style.fontFamily = "system-ui, -apple-system, sans-serif";
-  menu.style.fontSize = "13px";
   menu.style.display = "none";
-  menu.style.border = "1px solid #334155";
   menu.innerHTML = `
-    <div style="font-weight: 600; margin-bottom: 12px; font-size: 15px; border-bottom: 1px solid #334155; padding-bottom: 8px; color: #f1f5f9; display: flex; justify-content: space-between; align-items: center;">
-      <span>Exxat Routing Tools</span>
-      <span id="exxat-menu-close" style="cursor: pointer; color: #94a3b8; padding: 0 4px;">✕</span>
+    <div style="font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between;">
+      <span>🔴 Exxat Routing Tools</span>
+      <span id="exxat-menu-close" style="cursor: pointer;">✕</span>
     </div>
-    
-    <div style="margin-bottom: 16px;">
-      <label style="display: flex; align-items: center; cursor: pointer; gap: 8px;">
-        <input type="checkbox" id="exxat-manual-toggle" style="width: 16px; height: 16px; cursor: pointer;">
-        <span style="font-weight: 500;">Enable Manual Download Routing</span>
-      </label>
-    </div>
-    
-    <div style="background: #0f172a; padding: 12px; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; border: 1px solid #1e293b;">
-      <div style="color: #94a3b8; margin-bottom: 6px; font-weight: 500; display: flex; justify-content: space-between;">
-        <span>Current Target Path:</span>
-        <span id="exxat-status-indicator" style="color: #ef4444;">● OFF</span>
-      </div>
-      <div id="exxat-manual-path" style="color: #4ade80; word-break: break-all; min-height: 14px;">-</div>
-    </div>
-    
-    <div style="margin-top: 12px; font-size: 11px; color: #64748b; line-height: 1.4;">
-      The target path updates automatically as you click around the student dashboard.
-    </div>
+    <input type="checkbox" id="exxat-manual-toggle"> Enable Routing
+    <div id="exxat-secret-data" style="margin-top: 10px; font-size: 11px;"></div>
+    <div id="exxat-manual-path" style="display:none;"></div>
   `;
-
-  document.body.appendChild(dot);
   document.body.appendChild(menu);
 
-  const toggleCheckbox = document.getElementById("exxat-manual-toggle");
-  const closeBtn = document.getElementById("exxat-menu-close");
-  const statusIndicator = document.getElementById("exxat-status-indicator");
-
-  // Toggle Menu Open/Close
-  dot.addEventListener("click", (e) => {
-    e.stopPropagation();
-    menu.style.display = menu.style.display === "none" ? "block" : "none";
-  });
-
-  closeBtn.addEventListener("click", () => {
-    menu.style.display = "none";
-  });
-
-  // Initialize state from storage
-  chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    toggleCheckbox.checked = !!res.manualDownloadMode;
-    if (toggleCheckbox.checked) {
-      statusIndicator.style.color = "#4ade80";
-      statusIndicator.innerText = "● ON";
-      updateManualDownloadFolder();
-    }
-  });
-
-  // Handle Toggle Checkbox change
-  toggleCheckbox.addEventListener("change", (e) => {
-    const newVal = e.target.checked;
-    console.warn(`[Exxat:MANUAL] Toggle changed to: ${newVal}`);
-    
-    if (newVal) {
-      statusIndicator.style.color = "#4ade80";
-      statusIndicator.innerText = "● ON";
-      chrome.storage.local.set({ manualDownloadMode: true }, () => {
-        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
-        updateManualDownloadFolder();
-      });
-    } else {
-      statusIndicator.style.color = "#ef4444";
-      statusIndicator.innerText = "● OFF";
-      document.getElementById("exxat-manual-path").innerText = "-";
-      chrome.storage.local.set({ manualDownloadMode: false }, () => {
-        chrome.storage.local.remove(["manualDownloadFolder", "manualCandidate"]);
-        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: false }).catch(() => {});
-        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: null }).catch(() => {});
-      });
-    }
+  dot.addEventListener("click", () => menu.style.display = menu.style.display === "none" ? "block" : "none");
+  document.getElementById("exxat-menu-close").addEventListener("click", () => menu.style.display = "none");
+  document.getElementById("exxat-manual-toggle").addEventListener("change", (e) => {
+    chrome.storage.local.set({ manualDownloadMode: e.target.checked });
   });
 }
 
-// Watch storage changes to sync immediately (in case another tab/iframe toggles it)
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === "local" && "manualDownloadMode" in changes) {
     const isModeActive = !!changes.manualDownloadMode.newValue;
-    console.warn("[Exxat:MANUAL] Storage onChanged detected manualDownloadMode:", isModeActive);
-    
-    const toggleCheckbox = document.getElementById("exxat-manual-toggle");
-    const statusIndicator = document.getElementById("exxat-status-indicator");
-    
-    if (toggleCheckbox) {
-      toggleCheckbox.checked = isModeActive;
-      if (isModeActive) {
-        statusIndicator.style.color = "#4ade80";
-        statusIndicator.innerText = "● ON";
-      } else {
-        statusIndicator.style.color = "#ef4444";
-        statusIndicator.innerText = "● OFF";
-        const pathEl = document.getElementById("exxat-manual-path");
-        if (pathEl) pathEl.innerText = "-";
-      }
-    }
-    
-    chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: isModeActive }).catch(() => {});
-    
-    if (isModeActive) {
-      updateManualDownloadFolder();
-    } else {
-      chrome.storage.local.remove(["manualDownloadFolder", "manualCandidate"]);
-      chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: null }).catch(() => {});
-    }
+    const toggle = document.getElementById("exxat-manual-toggle");
+    if (toggle) toggle.checked = isModeActive;
+    if (isModeActive) updateManualDownloadFolder();
   }
 });
 
-// Register click and mousedown listeners to immediately capture context on user actions
-document.addEventListener("click", () => {
-  chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    if (res.manualDownloadMode) {
-      updateManualDownloadFolder();
-    }
-  });
-});
+document.addEventListener("click", (e) => updateManualDownloadFolder(e.target));
+document.addEventListener("mousedown", (e) => updateManualDownloadFolder(e.target));
 
-document.addEventListener("mousedown", () => {
-  chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    if (res.manualDownloadMode) {
-      updateManualDownloadFolder();
-    }
-  });
-});
-
-// Periodic update check every 1 second
 setInterval(() => {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    if (res.manualDownloadMode) {
-      updateManualDownloadFolder();
-    }
+    if (res.manualDownloadMode) updateManualDownloadFolder();
   });
 }, 1000);
 
-// Initialize UI
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", injectPageSecretUI);
 } else {
   injectPageSecretUI();
 }
-
