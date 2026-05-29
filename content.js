@@ -1742,6 +1742,7 @@ function detectCandidateNameFromDOM() {
 }
 
 document.addEventListener('click', (e) => {
+  if (window.top !== window.self) return;
   const candidateRow = e.target.closest('div[aria-label^="Select student"], div[aria-label^="Select faculty"], div[aria-label^="Select "]');
   if (candidateRow) {
     const link = candidateRow.querySelector('a.link-text');
@@ -1757,8 +1758,9 @@ document.addEventListener('click', (e) => {
 }, true);
 
 async function updateManualDownloadFolder(clickedElement = null) {
-  if (!chrome || !chrome.runtime || !chrome.runtime.id) return;
+  if (window.top !== window.self) return;
   try {
+    if (!chrome || !chrome.runtime || !chrome.runtime.id) return;
     chrome.storage.local.get(["manualDownloadMode"], (res) => {
       if (chrome.runtime.lastError) return;
       if (!res || !res.manualDownloadMode) return;
@@ -1862,6 +1864,7 @@ function injectPageSecretUI() {
 }
 
 chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (window.top !== window.self) return;
   if (namespace === "local" && "manualDownloadMode" in changes) {
     const isModeActive = !!changes.manualDownloadMode.newValue;
     const toggle = document.getElementById("exxat-manual-toggle");
@@ -1870,31 +1873,33 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
-document.addEventListener("click", (e) => updateManualDownloadFolder(e.target));
-document.addEventListener("mousedown", (e) => updateManualDownloadFolder(e.target));
+document.addEventListener("click", (e) => { if (window.top === window.self) updateManualDownloadFolder(e.target); });
+document.addEventListener("mousedown", (e) => { if (window.top === window.self) updateManualDownloadFolder(e.target); });
 
 
 
-let modeInterval = setInterval(() => {
-  if (!chrome || !chrome.runtime || !chrome.runtime.id) {
-    clearInterval(modeInterval);
-    return;
-  }
-  try {
-    chrome.storage.local.get(["manualDownloadMode"], (res) => {
-      if (chrome.runtime.lastError) {
+if (window.top === window.self) {
+  let modeInterval = setInterval(() => {
+    try {
+      if (!chrome || !chrome.runtime || !chrome.runtime.id) {
         clearInterval(modeInterval);
         return;
       }
-      if (res && res.manualDownloadMode) updateManualDownloadFolder();
-    });
-  } catch (e) {
-    clearInterval(modeInterval);
-  }
-}, 1000);
+      chrome.storage.local.get(["manualDownloadMode"], (res) => {
+        if (chrome.runtime.lastError) {
+          clearInterval(modeInterval);
+          return;
+        }
+        if (res && res.manualDownloadMode) updateManualDownloadFolder();
+      });
+    } catch (e) {
+      clearInterval(modeInterval);
+    }
+  }, 1000);
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", injectPageSecretUI);
-} else {
-  injectPageSecretUI();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", injectPageSecretUI);
+  } else {
+    injectPageSecretUI();
+  }
 }
