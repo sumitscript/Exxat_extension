@@ -1756,8 +1756,6 @@ document.addEventListener('click', (e) => {
   }
 }, true);
 
-let lastDetectedRequirement = "General Requirement";
-
 async function updateManualDownloadFolder(clickedElement = null) {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
     if (!res.manualDownloadMode) return;
@@ -1769,15 +1767,10 @@ async function updateManualDownloadFolder(clickedElement = null) {
       lastDetectedCandidate = domCandidate;
     }
     
-    const domRequirement = detectActiveRequirementNameFromDOM(clickedElement);
-    if (domRequirement && domRequirement !== "General Requirement") {
-      lastDetectedRequirement = domRequirement;
-    }
-    
     const safeCandidate = lastDetectedCandidate && lastDetectedCandidate !== "General Candidates" ? lastDetectedCandidate : "General Candidates";
     const safeGroup = lastDetectedGroup && lastDetectedGroup !== "General Group" ? lastDetectedGroup : "General Group";
     
-    const folderPath = `Exxat_Downloads/${safeGroup}/${lastDetectedRequirement}/${safeCandidate}`.replace(/\/+/g, '/');
+    const folderPath = `Exxat_Downloads/${safeGroup}/${safeCandidate}`.replace(/\/+/g, '/');
     
     const pathEl = document.getElementById("exxat-manual-path");
     if (pathEl) {
@@ -1786,7 +1779,6 @@ async function updateManualDownloadFolder(clickedElement = null) {
 
     chrome.storage.local.set({ 
       manualGroup: safeGroup,
-      manualRequirement: lastDetectedRequirement,
       manualCandidate: safeCandidate,
       manualDownloadFolder: folderPath 
     });
@@ -1794,16 +1786,15 @@ async function updateManualDownloadFolder(clickedElement = null) {
     chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: folderPath }).catch(() => {});
     chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
     
-    updateSecretUI(safeGroup, lastDetectedRequirement, safeCandidate, folderPath);
+    updateSecretUI(safeGroup, safeCandidate, folderPath);
   });
 }
 
-function updateSecretUI(group, req, candidate, targetPath) {
+function updateSecretUI(group, candidate, targetPath) {
   const dataDiv = document.getElementById('exxat-secret-data');
   if (dataDiv) {
     dataDiv.innerHTML = `
       Group: ${group}<br>
-      Requirement: ${req}<br>
       Candidate: ${candidate}<br>
       <span style="color:#4ade80; font-weight:bold; word-break: break-all;">Target Path: ${targetPath}</span>
     `;
@@ -1876,45 +1867,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 document.addEventListener("click", (e) => updateManualDownloadFolder(e.target));
 document.addEventListener("mousedown", (e) => updateManualDownloadFolder(e.target));
 
-function detectActiveRequirementNameFromDOM(clickedElement = null) {
-  // If we clicked directly on something that looks like a requirement, try to parse it
-  if (clickedElement) {
-    const row = clickedElement.closest('.bg-white, tr, .group\\/item, li');
-    if (row) {
-      const textEl = row.querySelector('.font-semibold, .font-medium, h3, h4, .text-gray-900');
-      if (textEl && textEl.textContent) {
-        let text = cleanName(textEl.textContent).replace(/\*$/, '').trim();
-        if (text && text.length < 60 && !text.toLowerCase().includes("select")) {
-          return text;
-        }
-      }
-    }
-  }
 
-  // Fallback 1: Look for an actively selected row in the UI (like a selected requirement)
-  const selectedRows = document.querySelectorAll('.bg-primary-50, [aria-selected="true"], [aria-current="true"], .e-active, .active');
-  for (const row of selectedRows) {
-    if (row.getAttribute('aria-label') && row.getAttribute('aria-label').toLowerCase().includes('select')) continue;
-    
-    const textEl = row.querySelector('.font-semibold, .font-medium, h3, h4');
-    if (textEl && textEl.textContent) {
-      let text = cleanName(textEl.textContent).replace(/\*$/, '').trim();
-      if (text && text.length < 60) return text;
-    }
-  }
-
-  // Fallback 2: Look for an open requirement details pane header
-  const headers = document.querySelectorAll('h2.font-semibold, h3.font-semibold');
-  for (const header of headers) {
-    if (header.closest('div.w-60') || header.closest("div[class*='lg:w-[16rem]']")) continue;
-    let text = cleanName(header.textContent).replace(/\*$/, '').trim();
-    if (text && text.length < 60 && text !== "General Requirements" && text !== "Onboarding Requirements") {
-      return text;
-    }
-  }
-
-  return null;
-}
 
 let modeInterval = setInterval(() => {
   if (!chrome || !chrome.runtime || !chrome.runtime.id) {

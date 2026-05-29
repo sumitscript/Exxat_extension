@@ -411,7 +411,6 @@ const secretDot          = document.getElementById("secret-dot");
 const manualPanel        = document.getElementById("manual-download-panel");
 const chkManualDownload  = document.getElementById("chk-manual-download");
 const manualGroupVal     = document.getElementById("manual-group-val");
-const manualRequirementVal = document.getElementById("manual-requirement-val");
 const manualCandidateVal = document.getElementById("manual-candidate-val");
 const manualPathVal      = document.getElementById("manual-path-val");
 
@@ -429,7 +428,6 @@ chkManualDownload.addEventListener("change", () => {
       chrome.storage.local.remove([
         "manualDownloadFolder",
         "manualGroup",
-        "manualRequirement",
         "manualCandidate"
       ]);
     }
@@ -441,7 +439,6 @@ function syncManualModeData() {
   chrome.storage.local.get([
     "manualDownloadMode",
     "manualGroup",
-    "manualRequirement",
     "manualCandidate",
     "manualDownloadFolder"
   ], (res) => {
@@ -450,9 +447,8 @@ function syncManualModeData() {
     // Only update text values if panel is visible to save cycles
     if (manualPanel.style.display !== "none") {
       manualGroupVal.textContent = res.manualGroup || "-";
-      manualRequirementVal.textContent = res.manualRequirement || "-";
       manualCandidateVal.textContent = res.manualCandidate || "General Candidates";
-      manualPathVal.textContent = res.manualDownloadFolder || "Exxat_Downloads/General Group/General Requirement/General Candidates";
+      manualPathVal.textContent = res.manualDownloadFolder || "Exxat_Downloads/General Group/General Candidates";
     }
   });
 }
