@@ -1677,143 +1677,103 @@ function detectCategory() {
     }
   }
 
-  // Strategy 4: Fallback based on URL
-  const url = window.location.href.toLowerCase();
-  if (url.includes("student")) return "Student Requirements";
-  if (url.includes("faculty")) return "Faculty Requirements";
-  if (url.includes("school")) return "School Requirements";
-  if (url.includes("coordinator")) return "Coordinator Requirements";
-  if (url.includes("instructor")) return "Clinical Instructors";
 
-  console.warn("[Exxat:MANUAL] detectCategory: Defaulting to General Requirements");
-  return "General Requirements";
+let lastDetectedCandidate = "General Candidates";
+let lastDetectedGroup = "General Group";
+
+function cleanName(raw) {
+  if (!raw) return "";
+  return raw.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/[<>:"/\\|?*]+/g, '');
 }
 
-function detectCandidateName() {
-  const badWords = /^(students?|faculty|coordinators?|school|requirements?|documents?|status|onboarding|history|details|schedule|submission|group|placement|assignments|dashboard|home|reports|help|logout|profile|general candidates)$/i;
-
-  // Strategy 1: Active sidebar candidate item (including Syncfusion .e-active classes)
-  const sidebar = document.querySelector("div.w-60, div[class*='lg:w-[16rem]'], .bg-card, .e-sidebar");
-  if (sidebar) {
-    const listItems = sidebar.querySelectorAll("[role='listitem'], .e-list-item, li");
-    for (const item of listItems) {
-      const hasActiveAttr = item.getAttribute("aria-current") === "true" || item.getAttribute("aria-current") === "page" || item.getAttribute("aria-selected") === "true";
-      const hasActiveClass = item.classList.contains("active") || item.classList.contains("selected") || item.classList.contains("e-active") || item.classList.contains("e-selected");
-      const hasActiveChild = item.querySelector(".active, .selected, .e-active, .e-selected, [aria-current='true'], [aria-current='page'], [aria-selected='true']");
-      
-      const classStr = item.className.toLowerCase();
-      const isStyledActive = classStr.includes("active") || classStr.includes("selected") || classStr.includes("highlight");
-
-      if (hasActiveAttr || hasActiveClass || hasActiveChild || isStyledActive) {
-        const text = extractCleanText(item);
-        if (text) {
-          const cleaned = cleanName(text);
-          if (cleaned && cleaned !== "-" && !badWords.test(cleaned)) {
-            console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active sidebar item: "${text}" -> "${cleaned}"`);
-            return cleaned;
-          }
-        }
-      }
-    }
+function detectGroupName() {
+  // Try to find the group name heading provided by user HTML
+  const groupHeading = document.querySelector('span[role="heading"][aria-level="2"]');
+  if (groupHeading && groupHeading.textContent) {
+    return cleanName(groupHeading.textContent);
   }
-
-  // Strategy 2: Details pane main header (person's name)
-  const mainPane = document.querySelector("div.flex-1, div[class*='flex-1'], main, #detail-pane, .e-content");
-  if (mainPane) {
-    const headers = mainPane.querySelectorAll('h1, h2, h3, .font-bold, .font-semibold, .e-header-text, .e-title');
-    for (const el of headers) {
-      // Exclude breadcrumbs and specific toolbars
-      if (el.closest('.e-breadcrumb') || el.closest('.e-toolbar')) continue;
-      
-      const text = el.textContent.trim();
-      if (text && text.length < 60 && text.length > 3) {
-        const cleaned = cleanName(text);
-        if (cleaned && !badWords.test(cleaned) && !text.includes(":") && !text.includes(" - ")) {
-          console.warn(`[Exxat:MANUAL] detectCandidateName: Matched detail pane header: "${text}" -> "${cleaned}"`);
-          return cleaned;
-        }
-      }
-    }
-  }
-
-  // Strategy 3: General active item across the whole page
-  const activeItems = document.querySelectorAll("[role='listitem'].active, [role='listitem'].e-active, [role='listitem'][aria-current='true'], [role='listitem'][aria-selected='true'], tr.e-active, tr.e-selected");
-  for (const item of activeItems) {
-    // If it's a table row, try to get the first or second column (usually name)
-    if (item.tagName === 'TR') {
-      const cells = item.querySelectorAll('td');
-      for (const cell of cells) {
-         const text = cell.textContent.trim();
-         if (text && text.length > 2 && text.length < 50 && !text.includes('@')) {
-            const cleaned = cleanName(text);
-            if (cleaned && !badWords.test(cleaned)) {
-               console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active table row cell: "${text}" -> "${cleaned}"`);
-               return cleaned;
-            }
-         }
-      }
-    }
-
-    const text = extractCleanText(item);
-    if (text) {
-      const cleaned = cleanName(text);
-      if (cleaned && !badWords.test(cleaned)) {
-        console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active listitem: "${text}" -> "${cleaned}"`);
-        return cleaned;
-      }
-    }
-  }
-
-  console.warn("[Exxat:MANUAL] detectCandidateName: Defaulting to General Candidates");
-  return "General Candidates";
-}
-
-function detectRequirementName(clickedElement) {
-  if (!clickedElement) return "General Requirement";
   
-  // Try to find the closest card or row that this button is inside
-  const container = clickedElement.closest('.bg-white, .card, [role="row"], tr, .e-row, section, .border');
-  if (container) {
-    // Look for headers inside this specific container
-    const header = container.querySelector('h1, h2, h3, h4, .font-bold, .font-semibold');
-    if (header) {
-      const text = header.textContent.trim();
-      if (text && text.length < 80) {
-         return cleanName(text) || "General Requirement";
-      }
-    }
-    
-    // Look for the first column if it's a table row
-    if (container.tagName === 'TR' || container.classList.contains('e-row')) {
-       const firstCell = container.querySelector('td');
-       if (firstCell && firstCell.textContent) {
-          const text = firstCell.textContent.trim();
-          if (text.length > 2 && text.length < 80) {
-             return cleanName(text) || "General Requirement";
-          }
-       }
-    }
+  // Fallback to older class
+  const oldGroup = document.querySelector(".group-name");
+  if (oldGroup && oldGroup.textContent) {
+     return cleanName(oldGroup.textContent);
   }
-  return "General Requirement";
+
+  return "General Group";
 }
 
-let lastDetectedRequirement = "General Requirement";
+function detectCandidateNameFromDOM() {
+  // Try to find the active student/faculty in the list
+  // The active one typically has a different border or background class in Exxat (e.g. border-l-primary-600)
+  // Let's look for all select-able candidate rows
+  const rows = document.querySelectorAll('div[aria-label^="Select student"], div[aria-label^="Select faculty"], div[aria-label^="Select "]');
+  
+  for (const row of rows) {
+    // Check if this row is visually active. Exxat often uses border-l-primary-xxx or bg-primary-xxx for active items
+    if (row.className.includes('border-l-primary') || row.className.includes('bg-primary-50') || row.getAttribute('aria-current') === 'true') {
+      const link = row.querySelector('a.link-text');
+      if (link && link.textContent) {
+        return cleanName(link.textContent);
+      }
+      // Fallback: extract from aria-label
+      const aria = row.getAttribute('aria-label');
+      if (aria) {
+         return cleanName(aria.replace(/Select (student|faculty) /i, ''));
+      }
+    }
+  }
 
-async function updateManualDownloadFolder(clickedElement = null) {
+  // Fallback to general DOM scanning if aria-labels aren't found
+  const badWords = /^(students?|faculty|coordinators?|school|requirements?|documents?|status|onboarding|history|details|schedule|submission|group|placement|assignments|dashboard|home|reports|help|logout|profile|general candidates)$/i;
+  
+  const activeItems = document.querySelectorAll(".e-active, .e-selected, [aria-current='true'], [aria-current='page'], [aria-selected='true'], tr.e-active, tr.e-selected, .active");
+  for (const item of activeItems) {
+    const link = item.querySelector('a.link-text');
+    if (link && link.textContent) {
+       const cleaned = cleanName(link.textContent);
+       if (cleaned && !badWords.test(cleaned)) return cleaned;
+    }
+  }
+
+  return null;
+}
+
+// Intercept clicks to save candidate names instantly
+document.addEventListener('click', (e) => {
+  const candidateRow = e.target.closest('div[aria-label^="Select student"], div[aria-label^="Select faculty"], div[aria-label^="Select "]');
+  if (candidateRow) {
+    const link = candidateRow.querySelector('a.link-text');
+    if (link && link.textContent) {
+      lastDetectedCandidate = cleanName(link.textContent);
+    } else {
+      const aria = candidateRow.getAttribute('aria-label');
+      if (aria) {
+        lastDetectedCandidate = cleanName(aria.replace(/Select (student|faculty) /i, ''));
+      }
+    }
+    console.warn(`[Exxat:MANUAL] Clicked candidate row, saved candidate: "${lastDetectedCandidate}"`);
+  }
+}, true); // Use capture to grab it early
+
+
+async function updateManualDownloadFolder() {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
     if (!res.manualDownloadMode) return;
     
-    const candidate = detectCandidateName();
+    // Always update group name
+    lastDetectedGroup = detectGroupName();
     
-    if (clickedElement) {
-       const req = detectRequirementName(clickedElement);
-       if (req !== "General Requirement") {
-          lastDetectedRequirement = req;
-       }
+    // Try to detect candidate from DOM, fallback to last clicked
+    const domCandidate = detectCandidateNameFromDOM();
+    if (domCandidate) {
+      lastDetectedCandidate = domCandidate;
     }
     
-    const safeCandidate = candidate && candidate !== "General Candidates" ? candidate : "General Candidates";
-    const folderPath = `Exxat_Downloads/${lastDetectedRequirement}/${safeCandidate}`.replace(/\/+/g, '/');
+    const safeCandidate = lastDetectedCandidate && lastDetectedCandidate !== "General Candidates" ? lastDetectedCandidate : "General Candidates";
+    const safeGroup = lastDetectedGroup && lastDetectedGroup !== "General Group" ? lastDetectedGroup : "General Group";
+    
+    // The requested path: Exxat_Downloads / [Group Name] / [Candidate Name]
+    const folderPath = `Exxat_Downloads/${safeGroup}/${safeCandidate}`.replace(/\/+/g, '/');
     
     // UI Update - if the menu is open, show the live path
     const pathEl = document.getElementById("exxat-manual-path");
@@ -1822,13 +1782,13 @@ async function updateManualDownloadFolder(clickedElement = null) {
     }
 
     console.warn(`[Exxat:MANUAL] updateManualDownloadFolder:
-      - Requirement: "${lastDetectedRequirement}"
-      - Candidate: "${candidate}"
+      - Group: "${safeGroup}"
+      - Candidate: "${safeCandidate}"
       - Target Path: "${folderPath}"`);
 
     // Set variables in storage
     chrome.storage.local.set({ 
-      manualCandidate: candidate,
+      manualCandidate: safeCandidate,
       manualDownloadFolder: folderPath 
     });
 
