@@ -1756,6 +1756,8 @@ document.addEventListener('click', (e) => {
   }
 }, true);
 
+let lastDetectedRequirement = "General Requirement";
+
 async function updateManualDownloadFolder(clickedElement = null) {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
     if (!res.manualDownloadMode) return;
