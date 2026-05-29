@@ -1690,6 +1690,8 @@ function detectCategory() {
 }
 
 function detectCandidateName() {
+  const badWords = /^(students?|faculty|coordinators?|school|requirements?|documents?|status|onboarding|history|details|schedule|submission|group|placement|assignments|dashboard|home|reports|help|logout|profile|general candidates)$/i;
+
   // Strategy 1: Active sidebar candidate item (including Syncfusion .e-active classes)
   const sidebar = document.querySelector("div.w-60, div[class*='lg:w-[16rem]'], .bg-card, .e-sidebar");
   if (sidebar) {
@@ -1706,7 +1708,7 @@ function detectCandidateName() {
         const text = extractCleanText(item);
         if (text) {
           const cleaned = cleanName(text);
-          if (cleaned && cleaned !== "-" && !/student|faculty|coordinator|school|requirement/i.test(cleaned)) {
+          if (cleaned && cleaned !== "-" && !badWords.test(cleaned)) {
             console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active sidebar item: "${text}" -> "${cleaned}"`);
             return cleaned;
           }
@@ -1724,10 +1726,9 @@ function detectCandidateName() {
       if (el.closest('.e-breadcrumb') || el.closest('.e-toolbar')) continue;
       
       const text = el.textContent.trim();
-      if (text && text.length < 60 && text.length > 3 &&
-          !/requirements|documents|status|onboarding|history|details|schedule|submission|group|placement|assignments/i.test(text)) {
+      if (text && text.length < 60 && text.length > 3) {
         const cleaned = cleanName(text);
-        if (cleaned) {
+        if (cleaned && !badWords.test(cleaned) && !text.includes(":") && !text.includes(" - ")) {
           console.warn(`[Exxat:MANUAL] detectCandidateName: Matched detail pane header: "${text}" -> "${cleaned}"`);
           return cleaned;
         }
@@ -1745,8 +1746,10 @@ function detectCandidateName() {
          const text = cell.textContent.trim();
          if (text && text.length > 2 && text.length < 50 && !text.includes('@')) {
             const cleaned = cleanName(text);
-            console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active table row cell: "${text}" -> "${cleaned}"`);
-            return cleaned;
+            if (cleaned && !badWords.test(cleaned)) {
+               console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active table row cell: "${text}" -> "${cleaned}"`);
+               return cleaned;
+            }
          }
       }
     }
@@ -1754,7 +1757,7 @@ function detectCandidateName() {
     const text = extractCleanText(item);
     if (text) {
       const cleaned = cleanName(text);
-      if (cleaned && !/student|faculty|coordinator|school|requirement/i.test(cleaned)) {
+      if (cleaned && !badWords.test(cleaned)) {
         console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active listitem: "${text}" -> "${cleaned}"`);
         return cleaned;
       }
@@ -1765,12 +1768,52 @@ function detectCandidateName() {
   return "General Candidates";
 }
 
-function updateManualDownloadFolder() {
+function detectRequirementName(clickedElement) {
+  if (!clickedElement) return "General Requirement";
+  
+  // Try to find the closest card or row that this button is inside
+  const container = clickedElement.closest('.bg-white, .card, [role="row"], tr, .e-row, section, .border');
+  if (container) {
+    // Look for headers inside this specific container
+    const header = container.querySelector('h1, h2, h3, h4, .font-bold, .font-semibold');
+    if (header) {
+      const text = header.textContent.trim();
+      if (text && text.length < 80) {
+         return cleanName(text) || "General Requirement";
+      }
+    }
+    
+    // Look for the first column if it's a table row
+    if (container.tagName === 'TR' || container.classList.contains('e-row')) {
+       const firstCell = container.querySelector('td');
+       if (firstCell && firstCell.textContent) {
+          const text = firstCell.textContent.trim();
+          if (text.length > 2 && text.length < 80) {
+             return cleanName(text) || "General Requirement";
+          }
+       }
+    }
+  }
+  return "General Requirement";
+}
+
+let lastDetectedRequirement = "General Requirement";
+
+async function updateManualDownloadFolder(clickedElement = null) {
   chrome.storage.local.get(["manualDownloadMode"], (res) => {
     if (!res.manualDownloadMode) return;
-
-    const folder3 = detectCandidateName();
-    const folderPath = `Exxat_Downloads/${folder3}`.replace(/\/+/g, '/');
+    
+    const candidate = detectCandidateName();
+    
+    if (clickedElement) {
+       const req = detectRequirementName(clickedElement);
+       if (req !== "General Requirement") {
+          lastDetectedRequirement = req;
+       }
+    }
+    
+    const safeCandidate = candidate && candidate !== "General Candidates" ? candidate : "General Candidates";
+    const folderPath = `Exxat_Downloads/${lastDetectedRequirement}/${safeCandidate}`.replace(/\/+/g, '/');
     
     // UI Update - if the menu is open, show the live path
     const pathEl = document.getElementById("exxat-manual-path");
@@ -1779,12 +1822,13 @@ function updateManualDownloadFolder() {
     }
 
     console.warn(`[Exxat:MANUAL] updateManualDownloadFolder:
-      - Candidate: "${folder3}"
+      - Requirement: "${lastDetectedRequirement}"
+      - Candidate: "${candidate}"
       - Target Path: "${folderPath}"`);
 
     // Set variables in storage
     chrome.storage.local.set({ 
-      manualCandidate: folder3,
+      manualCandidate: candidate,
       manualDownloadFolder: folderPath 
     });
 
