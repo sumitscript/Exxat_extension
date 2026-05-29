@@ -1156,11 +1156,11 @@ async function runGroupReplaySession() {
     }
 
     // Determine how many parent group rows there are
-    let parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+    let parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
     if (parentRows.length === 0) {
       console.log("[Exxat:GROUP] No group rows found. Waiting 5s...");
       await sleep(5000);
-      parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+      parentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
       if (parentRows.length === 0) {
         break; // No rows at all
       }
@@ -1173,7 +1173,7 @@ async function runGroupReplaySession() {
       if (stopReplayRequested) break;
 
       // Re-fetch parent row in case DOM changed
-      const currentParentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+      const currentParentRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
       if (i >= currentParentRows.length) break;
       const parentRow = currentParentRows[i];
 
@@ -1210,7 +1210,7 @@ async function runGroupReplaySession() {
          if (stopReplayRequested) break;
          
          // RE-FETCH detail row because DOM might have rebuilt if we went back!
-         const currentParentRowsInner = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)"));
+         const currentParentRowsInner = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
          if (i >= currentParentRowsInner.length) break;
          const currentParentRowInner = currentParentRowsInner[i];
          
@@ -1295,6 +1295,15 @@ async function runGroupReplaySession() {
              });
            }
            await sendProgressUpdate({ ...progress });
+
+           // Wait for the list page to re-render its DOM!
+           let retryCount = 0;
+           while (retryCount < 10) {
+               const checkRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
+               if (checkRows.length > 0) break;
+               await sleep(1000);
+               retryCount++;
+           }
          } catch (e) {
            console.error("[Exxat:GROUP] Failed to process slot", e);
            progress.failed++;
