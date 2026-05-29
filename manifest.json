@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Exxat One Downloader",
-  "version": "2.6.0",
+  "version": "2.10.5",
   "description": "Automates document downloads on the Exxat One learning platform.",
   "permissions": [
     "storage",
@@ -21,6 +21,22 @@
   "action": {
     "default_title": "Exxat One Downloader"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>",
+        "*://*.exxat.com/*",
+        "*://*.exxatone.com/*",
+        "*://*.steepgraph.com/*",
+        "https://*.exxat.com/*",
+        "https://*.exxatone.com/*",
+        "https://*.steepgraph.com/*"
+      ],
+      "js": ["selector.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
   "side_panel": {
     "default_path": "popup.html"
   }

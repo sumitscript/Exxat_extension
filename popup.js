@@ -1,5 +1,8 @@
 // Popup UI — Exxat One Downloader Extension
 // Requirements: 1.4, 6.1, 6.2, 6.4
+console.warn("[Exxat Popup] popup.js loaded successfully.");
+
+
 
 // ---------------------------------------------------------------------------
 // Element references
@@ -393,3 +396,64 @@ btnExportHistory.addEventListener("click", () => {
     URL.revokeObjectURL(url);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hidden Manual Download Controls Logic
+// ---------------------------------------------------------------------------
+
+const secretDot          = document.getElementById("secret-dot");
+const manualPanel        = document.getElementById("manual-download-panel");
+const chkManualDownload  = document.getElementById("chk-manual-download");
+const manualGroupVal     = document.getElementById("manual-group-val");
+const manualCategoryVal  = document.getElementById("manual-category-val");
+const manualCandidateVal = document.getElementById("manual-candidate-val");
+const manualPathVal      = document.getElementById("manual-path-val");
+
+// Toggle panel visibility on secret dot click
+secretDot.addEventListener("click", () => {
+  const isHidden = manualPanel.style.display === "none";
+  manualPanel.style.display = isHidden ? "block" : "none";
+});
+
+// Toggle manual download mode in storage
+chkManualDownload.addEventListener("change", () => {
+  const isChecked = chkManualDownload.checked;
+  chrome.storage.local.set({ manualDownloadMode: isChecked }, () => {
+    if (!isChecked) {
+      chrome.storage.local.remove([
+        "manualDownloadFolder",
+        "manualGroup",
+        "manualCategory",
+        "manualCandidate"
+      ]);
+    }
+  });
+});
+
+// Sync manual panel state and values from storage
+function syncManualModeData() {
+  chrome.storage.local.get([
+    "manualDownloadMode",
+    "manualGroup",
+    "manualCategory",
+    "manualCandidate",
+    "manualDownloadFolder"
+  ], (res) => {
+    chkManualDownload.checked = !!res.manualDownloadMode;
+    
+    // Only update text values if panel is visible to save cycles
+    if (manualPanel.style.display !== "none") {
+      manualGroupVal.textContent = res.manualGroup || "-";
+      manualCategoryVal.textContent = res.manualCategory || "-";
+      manualCandidateVal.textContent = res.manualCandidate || "-";
+      manualPathVal.textContent = res.manualDownloadFolder || "-";
+    }
+  });
+}
+
+// Initial sync
+syncManualModeData();
+
+// Add sync to the existing page interval
+setInterval(syncManualModeData, 1000);
+

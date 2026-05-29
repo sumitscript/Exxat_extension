@@ -2,7 +2,9 @@
 // Injected into Exxat One pages. Handles recording and replay.
 // Rebuilt to match the actual Exxat One workflow observed in screenshots.
 
-console.log("[Exxat Downloader] content.js v2.6 loaded on", window.location.href);
+console.warn("🔴🔴🔴 [Exxat Downloader] content.js Loaded on:", window.location.href);
+console.warn("🔴🔴🔴 [Exxat Downloader] Mode state:", typeof chrome !== 'undefined' ? "chrome extension context ok" : "no chrome context");
+
 
 // ---------------------------------------------------------------------------
 // State
@@ -435,76 +437,91 @@ function clickRowToOpenDetail(row) {
  * @returns {Promise<{ downloaded: number, total: number }>}
  */
 async function downloadAllDocumentsOnDetailPage() {
-  console.log("[Exxat:DETAIL] Starting on", window.location.href);
+  console.log("[Exxat:GROUP/DETAIL] Starting on", window.location.href);
 
-  const STATUS_WORDS = ["get started", "pending review", "compliant", "not started", "action needed", "some action needed"];
+  // 1. Give the right pane time to load
+  await sleep(4000);
 
-  // Wait for React to render the requirements list and download icons
-  let found = false;
-  for (let i = 0; i < 25; i++) {
-    await sleep(1000);
-    const text = document.body.innerText.toLowerCase();
-    if (/due:/i.test(text) || STATUS_WORDS.some(w => text.includes(w))) {
-      // Extra wait for the icons to fully load and enable
-      await sleep(3500);
-      found = true;
-      break;
-    }
-  }
-
-  if (!found) {
-    console.warn("[Exxat:DETAIL] Timed out waiting for requirements to render.");
-  }
+  // 2. Find all requirement rows in the main pane (NOT the Group Sidebar)
+  const allListItems = Array.from(document.querySelectorAll("[role='listitem']"));
+  const isGroupPage = window.location.href.includes("/assignments/group/");
+  const groupSidebar = isGroupPage ? document.querySelector("div.w-60, div[class*='lg:w-[16rem]']") : null;
   
-  // Find all text nodes that match a status word exactly, or start with "Due:"
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-  const indicatorEls = [];
-  let node;
-  while (node = walker.nextNode()) {
-    const t = node.nodeValue.trim().toLowerCase();
-    if (STATUS_WORDS.includes(t) || t.startsWith("due:")) {
-      indicatorEls.push(node.parentElement);
-    }
-  }
+  const requirementRows = allListItems.filter(item => {
+      if (groupSidebar && groupSidebar.contains(item)) {
+          return false; // Skip if it's inside the Group Sidebar
+      }
+      if (!isGroupPage) {
+          const sidebar = item.closest(".w-60");
+          return !sidebar;
+      }
+      return true;
+  });
   
+  if (requirementRows.length === 0) {
+      console.warn("[Exxat:GROUP/DETAIL] No requirement rows found on the right pane.");
+      return { downloaded: 0, total: 0 };
+  }
+
   let downloaded = 0;
   let total = 0;
-  const processedButtons = new Set();
-  
-  for (const el of indicatorEls) {
-    if (stopReplayRequested) break;
-    
-    // Walk up to 6 levels to find the container block
-    let parent = el.parentElement;
-    let btn = null;
-    for (let i = 0; i < 6; i++) {
-      if (!parent) break;
-      const candidates = Array.from(parent.querySelectorAll("button")).filter(b => {
-        const text = (b.textContent||"").trim().toLowerCase();
-        // Exclude "Message" button, exclude buttons with obvious non-download text
-        if (text.includes("message") || text.includes("ask leo")) return false;
-        // Must contain an SVG icon (the download icon)
-        return b.querySelector("svg"); 
-      });
-      if (candidates.length > 0) {
-        btn = candidates[0]; // take the first valid button in this block
-        break;
-      }
-      parent = parent.parentElement;
-    }
-    
-    if (btn && !processedButtons.has(btn)) {
-      processedButtons.add(btn);
-      total++;
+
+  for (let i = 0; i < requirementRows.length; i++) {
+      if (stopReplayRequested) break;
       
-      console.log(`[Exxat:DETAIL] Clicking download button`);
-      simulateReactClick(btn);
-      downloaded++;
-      await sleep(2000); // Wait for download to trigger
-    }
+      const row = requirementRows[i];
+      const rowText = row.textContent.trim().substring(0, 40).replace(/\n/g, ' ');
+      console.log(`[Exxat:GROUP/DETAIL] Checking requirement: ${rowText}`);
+      
+      // Look for a download button immediately visible (just in case)
+      let directDownload = row.querySelector("svg[data-icon='download'], svg.fa-download");
+      if (directDownload) {
+          console.log("[Exxat:GROUP/DETAIL]     Found direct download button! Clicking...");
+          simulateReactClick(directDownload.closest("button") || directDownload);
+          downloaded++;
+          total++;
+          await sleep(2000);
+          continue;
+      }
+      
+      // Otherwise, click the row to open the drawer
+      console.log("[Exxat:GROUP/DETAIL]     Clicking row to open drawer...");
+      const clickableRow = row.querySelector("button, a") || row;
+      simulateReactClick(clickableRow);
+      await sleep(3500); // Wait for drawer to slide out and load
+      
+      // Now look for download buttons anywhere on the page (usually in the active drawer)
+      const svgs = Array.from(document.querySelectorAll("svg[data-icon='download'], svg.fa-download"));
+      const downloadBtns = svgs.map(svg => svg.closest("button")).filter(b => b && !b.disabled);
+      
+      if (downloadBtns.length > 0) {
+          // Assume the last button in the DOM is inside the active drawer
+          const targetBtn = downloadBtns[downloadBtns.length - 1];
+          console.log("[Exxat:GROUP/DETAIL]     Found download button in drawer! Clicking...");
+          simulateReactClick(targetBtn);
+          downloaded++;
+          total++;
+          await sleep(2500); // Wait for download to start
+      } else {
+          console.log("[Exxat:GROUP/DETAIL]     No download button found in drawer.");
+      }
+      
+      // Close the drawer if there is a close button
+      const closeBtns = Array.from(document.querySelectorAll("button[aria-label='Close'], button[aria-label='close' i], button svg.fa-times, .e-close"));
+      if (closeBtns.length > 0) {
+          const targetClose = closeBtns[closeBtns.length - 1];
+          simulateReactClick(targetClose.closest("button") || targetClose);
+          console.log("[Exxat:GROUP/DETAIL]     Drawer closed.");
+          await sleep(1500); // Wait for drawer to close
+      } else {
+          // Fallback: press Escape
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+          console.log("[Exxat:GROUP/DETAIL]     Escape key sent to close drawer.");
+          await sleep(1500);
+      }
   }
 
-  console.log(`[Exxat:DETAIL] Done — ${downloaded}/${total} downloaded`);
+  console.log(`[Exxat:GROUP/DETAIL] Done — ${downloaded}/${total} downloaded`);
   return { downloaded, total };
 }
 
@@ -891,7 +908,7 @@ async function ensureOnboardingTab() {
  * @param {string} listPageUrl
  */
 async function navigateBackToList(listPageUrl) {
-  console.log("[Exxat:REPLAY] Navigating back to list page");
+  console.log("[Exxat:GROUP/REPLAY] Navigating back to list page");
 
   // Approach 1: Click the "Schedules and onboarding" breadcrumb link using TreeWalker
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -905,30 +922,39 @@ async function navigateBackToList(listPageUrl) {
   }
 
   if (breadcrumb) {
-    console.log("[Exxat:REPLAY] Clicking breadcrumb: Schedules and onboarding");
+    console.log("[Exxat:GROUP/REPLAY] Clicking breadcrumb: Schedules and onboarding");
     const clickable = breadcrumb.closest("a, button, [role='button']") || breadcrumb;
     const beforeUrl = window.location.href;
     simulateReactClick(clickable);
     try {
       await waitForNavigation(beforeUrl, 15000);
       await waitForElement("table tbody tr", 15000);
-      console.log("[Exxat:REPLAY] Back on list page ✅");
+      console.log("[Exxat:GROUP/REPLAY] Back on list page ✅");
       return;
     } catch (_) {
-      console.warn("[Exxat:REPLAY] Breadcrumb click did not navigate — trying history.back()");
+      console.warn("[Exxat:GROUP/REPLAY] Breadcrumb click did not navigate — trying history.back()");
     }
   }
 
   // Fallback: history.back() — safe for React SPA, no full reload
-  console.log("[Exxat:REPLAY] Using history.back()");
+  console.log("[Exxat:GROUP/REPLAY] Using history.back()");
   const beforeUrl = window.location.href;
   window.history.back();
   try {
     await waitForNavigation(beforeUrl, 8000);
-    await waitForElement("table tbody tr", 8000);
-    console.log("[Exxat:REPLAY] Back on list page ✅");
+    
+    // Force React to reload the list table by clicking the "Group" tab if it exists
+    await sleep(2500); 
+    const activeTab = document.querySelector(".e-toolbar-item.e-active button, [role='tab'][aria-selected='true'], a[href*='tab=Group']");
+    if (activeTab) {
+      console.log("[Exxat:GROUP/REPLAY] Clicking active tab to force data refresh");
+      simulateReactClick(activeTab);
+    }
+
+    await waitForElement("table tbody tr.e-row", 8000);
+    console.log("[Exxat:GROUP/REPLAY] Back on list page ✅");
   } catch (_) {
-    console.warn("[Exxat:REPLAY] Could not confirm return to list page — continuing anyway");
+    console.warn("[Exxat:GROUP/REPLAY] Could not confirm return to list page — continuing anyway");
     await sleep(2000);
   }
 }
@@ -1121,7 +1147,7 @@ async function runGroupReplaySession() {
   startKeepalive();
 
   const currentUrl = window.location.href;
-  console.log(`[Exxat:GROUP] 🚀 Session STARTED on: ${currentUrl}`);
+  console.log(`[Exxat:GROUP] 🚀 Session STARTED on: ${currentUrl} (Extension v${chrome.runtime.getManifest().version})`);
 
   if (!currentUrl.includes("/assignments/list")) {
     console.error("[Exxat:GROUP] ❌ Not on the list page.");
@@ -1206,108 +1232,164 @@ async function runGroupReplaySession() {
       const innerRows = Array.from(detailRow.querySelectorAll("tr.e-row:not(.e-hiddenrow)"));
       console.log(`[Exxat:GROUP] Group ${groupName} has ${innerRows.length} slots/students`);
 
-      for (let j = 0; j < innerRows.length; j++) {
-         if (stopReplayRequested) break;
-         
-         // RE-FETCH detail row because DOM might have rebuilt if we went back!
-         const currentParentRowsInner = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
-         if (i >= currentParentRowsInner.length) break;
-         const currentParentRowInner = currentParentRowsInner[i];
-         
-         // Check if it's still expanded. If we navigated back, it might have collapsed!
-         const currentExpandIcon = currentParentRowInner.querySelector(".e-detailrowexpand, .e-detailrowcollapse");
-         if (currentExpandIcon && currentExpandIcon.classList.contains("e-detailrowcollapse")) {
-            console.log(`[Exxat:GROUP] Group collapsed after navigation, re-expanding...`);
-            currentExpandIcon.click();
-            await sleep(3500);
-         }
+      if (innerRows.length === 0) {
+          console.warn(`[Exxat:GROUP] No rows found inside group ${groupName}`);
+          continue;
+      }
 
-         const currentDetailRow = currentParentRowInner.nextElementSibling;
-         if (!currentDetailRow || !currentDetailRow.classList.contains("e-detailrow")) continue;
-         
-         const currentInnerRows = Array.from(currentDetailRow.querySelectorAll("tr.e-row:not(.e-hiddenrow)"));
-         if (j >= currentInnerRows.length) break;
-         
-         const studentRow = currentInnerRows[j];
+      // 1. Navigate to the Group Detail Page by clicking the first valid link in the nested grid
+      let entered = false;
+      for (const row of innerRows) {
+          const clicked = clickRowToOpenDetail(row);
+          if (clicked) {
+              entered = true;
+              break;
+          }
+      }
 
-         // Extract data
-         const scheduleIdMatch = studentRow.innerHTML.match(/\b\d{5,15}\b/);
-         const scheduleId = scheduleIdMatch ? scheduleIdMatch[0] : null;
-         
-         // In groups, the name is usually in the 2nd column of the inner table
-         const studentInfo = studentRow.querySelector("td[aria-colindex='2']")?.textContent?.trim() || "Unknown";
+      if (!entered) {
+          console.warn(`[Exxat:GROUP] Could not find a link to enter group detail page for ${groupName}`);
+          continue;
+      }
 
-         console.log(`[Exxat:GROUP]   Slot ${j+1}: Student="${studentInfo}", ID="${scheduleId}"`);
+      try {
+          await waitForNavigation(currentUrl, 15000);
+      } catch (err) { 
+          console.error("[Exxat:GROUP] Failed to navigate to group detail");
+          continue;
+      }
 
-         // Skip Faculty if they don't have schedule ID or link
-         const link = studentRow.querySelector("a[href*='/assignments/']");
-         if (!link) {
-           console.log(`[Exxat:GROUP]     ⏭ SKIPPING (No detail link found, likely Faculty)`);
-           continue;
-         }
+      // Wait for the detail page sidebar to fully load (can take time due to massive API fetches)
+      let initialBtnsFound = false;
+      for (let w = 0; w < 30; w++) {
+          await sleep(1000);
+          const btns = document.querySelectorAll("div.w-60 [role='listitem'] button, div.w-60 [role='listitem'] a, .bg-card [role='listitem'] button, .bg-card [role='listitem'] a");
+          if (btns.length > 0) {
+              await sleep(2500); // Give it an extra moment to fully stabilize
+              initialBtnsFound = true;
+              break;
+          }
+      }
 
-         // Target filter
-         let isExplicitlyTargeted = false;
-         if (targetSet.size > 0 && scheduleId) {
-           if (!targetSet.has(String(scheduleId))) {
-             console.log(`[Exxat:GROUP]     ⏭ SKIPPING (Schedule ID ${scheduleId} not in target template)`);
-             continue;
-           } else {
-             isExplicitlyTargeted = true;
-           }
-         }
+      if (!initialBtnsFound) {
+          console.warn(`[Exxat:GROUP] Timed out waiting for left sidebar to load for Group ${groupName}.`);
+      } else {
+          console.log(`[Exxat:GROUP] Sidebar loaded for Group ${groupName}. Processing all entities via scrolling...`);
+      }
+      
+      const processedNames = new Set();
+      let scrollContainer = document.querySelector("div.w-60 [role='list'], .bg-card [role='list'], div.flex-1.overflow-y-auto");
+      
+      console.log(`[Exxat:GROUP] --- PHASE 1: SCROLLING DOWN ---`);
+      let direction = "down";
+      
+      while (true) {
+          if (stopReplayRequested) break;
+          
+          // Restrict to descendants of the left sidebar container (w-60)
+          const groupSidebar = document.querySelector("div.w-60, div[class*='lg:w-[16rem]']");
+          const currentItems = groupSidebar 
+              ? Array.from(groupSidebar.querySelectorAll("[role='listitem']"))
+              : Array.from(document.querySelectorAll("div.w-60 [role='listitem'], div[class*='lg:w-[16rem]'] [role='listitem']"));
+          
+          for (const item of currentItems) {
+              if (stopReplayRequested) break;
+              
+              const entityNameText = item.textContent.trim().replace(/\n/g, ' ');
+              if (!entityNameText) continue; // Skip empty spacers
+              
+              const entityName = entityNameText.substring(0, 100);
+              
+              if (!processedNames.has(entityName)) {
+                  processedNames.add(entityName);
+                  
+                  console.log(`[Exxat:GROUP] Processing Sidebar Entity: ${entityName}`);
+                  
+                  const uid = `${groupName}_${entityName}`;
+                  if (historySet.has(uid)) {
+                      console.log(`[Exxat:GROUP]     ⏭ SKIPPING (Entity already in download history)`);
+                      continue; // Skip without clicking or waiting!
+                  }
 
-         // Duplicate prevention
-         if (scheduleId && historySet.has(String(scheduleId))) {
-           console.log(`[Exxat:GROUP]     ⏭ SKIPPING (Schedule ID ${scheduleId} already downloaded)`);
-           continue;
-         }
-         
-         console.log(`[Exxat:GROUP]     Navigating to details for ${scheduleId || studentInfo}`);
-         
-         // Let's store the group name temporarily to subfolder logic if we want to modify it later
-         try {
-           const result = await replayRowBuiltIn(studentRow, listPageUrl);
+                  // Determine active state by checking inner active elements
+                  const innerActive = item.querySelector("[aria-current='true'], [aria-current='page']");
+                  const isActive = !!innerActive || item.getAttribute("aria-current") === "true" || item.getAttribute("aria-current") === "page";
+                  
+                  if (!isActive) {
+                      console.log(`[Exxat:GROUP]     Clicking entity box and waiting 6s for data to fetch...`);
+                      
+                      // Click the button or anchor tag inside the listitem if present, otherwise fall back to the wrapper div
+                      let clickable = item.querySelector("button, a") || item;
+                      simulateReactClick(clickable);
+                      await sleep(6000); // Wait for the new content to fetch
+                  } else {
+                      console.log(`[Exxat:GROUP]     Entity is already active.`);
+                  }
+                  
+                  try {
+                      const result = await downloadAllDocumentsOnDetailPage();
+                      progress.processed++;
+                      
+                      historySet.add(uid);
+                      processedHistory.push({
+                          scheduleId: String(uid),
+                          studentName: entityName,
+                          timestamp: new Date().toISOString(),
+                          groupName: groupName
+                      });
+                      await chrome.storage.local.set({ processedHistory });
+                      
+                      await sendLogEntry({
+                         rowIndex: processedNames.size, studentId: entityName, scheduleId: uid,
+                         status: "SUCCESS", reason: `Downloaded ${result.downloaded} files`,
+                         timestamp: new Date().toISOString(),
+                      });
+                      await sendProgressUpdate({ ...progress });
+                  } catch (e) {
+                      progress.failed++;
+                      console.error("[Exxat:GROUP] Failed to download for entity", e);
+                  }
+              }
+          }
+          
+          if (scrollContainer) {
+              const oldScroll = scrollContainer.scrollTop;
+              if (direction === "down") {
+                  scrollContainer.scrollTop += 400; // Scroll down
+                  await sleep(1500); // Wait for DOM to update
+                  
+                  if (scrollContainer.scrollTop === oldScroll) {
+                      console.log("[Exxat:GROUP] ⬇️ Reached Bottom. Reversing direction to scroll UP...");
+                      direction = "up";
+                  }
+              } else {
+                  scrollContainer.scrollTop -= 400; // Scroll up
+                  await sleep(1500); // Wait for DOM to update
+                  
+                  if (scrollContainer.scrollTop === oldScroll || scrollContainer.scrollTop === 0) {
+                      console.log("[Exxat:GROUP] ⬆️ Reached Top. Sidebar traversal complete.");
+                      break;
+                  }
+              }
+          } else {
+              console.log("[Exxat:GROUP] No scroll container found, traversal complete.");
+              break; // No scroll container, can't scroll at all
+          }
+      }
 
-           if (result.success) {
-             progress.processed++;
-             if (scheduleId) {
-               historySet.add(String(scheduleId));
-               processedHistory.push({
-                 scheduleId: String(scheduleId),
-                 studentName: studentInfo,
-                 timestamp: new Date().toISOString(),
-                 groupName: groupName
-               });
-               await chrome.storage.local.set({ processedHistory });
-             }
-             await sendLogEntry({
-               rowIndex: j, studentId: studentInfo, scheduleId,
-               status: "SUCCESS", reason: result.message || "Completed successfully",
-               timestamp: new Date().toISOString(),
-             });
-           } else {
-             progress.failed++;
-             await sendLogEntry({
-               rowIndex: j, studentId: studentInfo, scheduleId,
-               status: "FAILED", reason: result.message || "Unknown error",
-               timestamp: new Date().toISOString(),
-             });
-           }
-           await sendProgressUpdate({ ...progress });
+      // 3. Navigate back to List Page
+      await navigateBackToList(listPageUrl);
 
-           // Wait for the list page to re-render its DOM!
-           let retryCount = 0;
-           while (retryCount < 10) {
-               const checkRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
-               if (checkRows.length > 0) break;
-               await sleep(1000);
-               retryCount++;
-           }
-         } catch (e) {
-           console.error("[Exxat:GROUP] Failed to process slot", e);
-           progress.failed++;
-         }
+      // Wait for list page to re-render
+      let retryCount = 0;
+      while (retryCount < 40) {
+          const checkRows = Array.from(document.querySelectorAll("tr.e-row:not(.e-hiddenrow):not(.e-detailrow)")).filter(r => !r.closest('.e-detailrow'));
+          if (checkRows.length > 0) {
+              await sleep(2000); // extra buffer for react to finish painting
+              break;
+          }
+          await sleep(1000);
+          retryCount++;
       }
     }
 
@@ -1368,7 +1450,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       break;
     }
-
     case "EXECUTE_RECORDED": {
       // Use the macro execution engine for recorded steps
       sendResponse({ ok: true });
@@ -1385,8 +1466,530 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true });
       break;
 
+    case "GET_CURRENT_MANUAL_PATH": {
+      const folder3 = detectCandidateName();
+      const folderPath = `Exxat_Downloads/${folder3}`.replace(/\/+/g, '/');
+      console.warn(`[Exxat:MANUAL] Dynamic path request GET_CURRENT_MANUAL_PATH resolved to: "${folderPath}"`);
+      sendResponse({ folderPath });
+      break;
+    }
+
     default:
       sendResponse({ ok: true });
       break;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Hidden Manual Download / Folder Bifurcation Logic (Content Script)
+// ---------------------------------------------------------------------------
+
+let cachedGroups = {}; // maps groupId -> { displayId, groupName }
+
+function isExxatPage() {
+  const url = window.location.href.toLowerCase();
+  if (url.includes("exxat") || url.includes("steepgraph")) return true;
+  if (document.title.toLowerCase().includes("exxat")) return true;
+  if (document.querySelector("[class*='e-grid'], [class*='e-control'], .e-row")) return true;
+  
+  const bodyText = document.body ? document.body.textContent.toLowerCase() : "";
+  if (bodyText.includes("onboarding") && bodyText.includes("schedule")) return true;
+  
+  return false;
+}
+
+function cleanName(text) {
+  if (!text) return "";
+  
+  // Remove email suffix if present
+  let cleaned = text.split("@")[0].trim();
+  
+  // Remove common status words if they leaked in
+  const statusRegex = /\b(compliant|pending|not started|draft|in progress|action needed|some action needed|approved|rejected|under review|confirmed|flagged|prod_)\b/gi;
+  cleaned = cleaned.replace(statusRegex, "");
+  
+  // Remove standalone initials or number badges (like GG, CC, CID, CIDI, F, c, St, 0, 1)
+  // Let's remove any words that are fully uppercase or single letters or numbers, if there are other words
+  const words = cleaned.split(/\s+/);
+  if (words.length > 1) {
+    const cleanWords = words.filter(word => {
+      if (/^\d+$/.test(word)) return false; // number
+      if (/^[A-Z]{1,4}$/.test(word)) return false; // uppercase initials
+      if (word.length === 1) return false; // single letter
+      return true;
+    });
+    if (cleanWords.length > 0) {
+      cleaned = cleanWords.join(" ");
+    }
+  }
+
+  // Replace special characters invalid for folders
+  cleaned = cleaned.replace(/[<>:"/\\|?*]+/g, '_')
+                   .replace(/\s+/g, ' ')
+                   .trim();
+                   
+  return cleaned;
+}
+
+function extractCleanText(item) {
+  if (!item) return "";
+  
+  // If the item has child elements, try to find the specific main text container first
+  const nameEl = item.querySelector('.font-medium, .font-semibold, [class*="name" i], [class*="title" i], [class*="label" i], .e-anchor, a');
+  if (nameEl) {
+    const text = nameEl.textContent.trim();
+    if (text && text.length > 1) {
+      return text;
+    }
+  }
+  
+  // Otherwise, clone and strip noise
+  const clone = item.cloneNode(true);
+  const noiseSelectors = [
+    'svg', 'i', '.avatar', '.initials', '.badge', '.status', '.count', '.number',
+    '[class*="avatar" i]', '[class*="badge" i]', '[class*="status" i]', '[class*="count" i]',
+    '[class*="icon" i]', 'button', '.e-checkbox-wrapper'
+  ];
+  
+  for (const sel of noiseSelectors) {
+    const elements = clone.querySelectorAll(sel);
+    for (const el of elements) {
+      el.remove();
+    }
+  }
+  
+  return clone.textContent.trim();
+}
+
+function getGroupIdFromUrl() {
+  const currentUrl = window.location.href;
+  const urlMatch = currentUrl.match(/\/assignments\/group\/([a-f0-9]{24}|\d+)/i) ||
+                   currentUrl.match(/\/assignments\/group\/([^/]+)/i);
+  return urlMatch ? urlMatch[1] : null;
+}
+
+function getGroupPlacementInfo() {
+  const currentUrl = window.location.href;
+  const displayId = getGroupIdFromUrl() || "UnknownID";
+  
+  if (cachedGroups[displayId]) {
+    return cachedGroups[displayId];
+  }
+  
+  let groupName = "";
+  
+  // 1. Breadcrumbs check (extremely reliable for group name)
+  const breadcrumb = document.querySelector('.e-breadcrumb, [class*="breadcrumb" i]');
+  if (breadcrumb) {
+    const items = breadcrumb.querySelectorAll('li, a, span');
+    if (items.length > 0) {
+      const text = items[items.length - 1].textContent.trim();
+      if (text && text.length > 2 && text.length < 100 && !/group|placement|assignment/i.test(text)) {
+        groupName = cleanName(text);
+      }
+    }
+  }
+
+  // 2. Scan page headers, excluding candidate list sidebar and details pane
+  if (!groupName) {
+    const headers = document.querySelectorAll('h1, h2, h3, .font-bold, .font-semibold, [class*="title" i], [class*="header" i]');
+    for (const el of headers) {
+      if (el.closest('div.w-60') || el.closest("div[class*='lg:w-[16rem]']") || el.closest('.bg-card') || el.closest('#detail-pane') || el.closest('main')) {
+        continue;
+      }
+      
+      const text = el.textContent.trim();
+      if (!text || text.length > 150 || text.includes("\n")) continue;
+
+      const numMatch = text.match(/\b\d{4,15}\b/);
+      if (numMatch) {
+        groupName = text.replace(numMatch[0], '')
+                        .replace(/^[-\s(),:|]+|[-\s(),:|]+$/g, '')
+                        .trim();
+        groupName = cleanName(groupName);
+        break;
+      } else if (text.length > 5 && !/requirements|onboarding|schedules/i.test(text)) {
+        groupName = cleanName(text);
+      }
+    }
+  }
+
+  // 3. Fallback to Document Title
+  if (!groupName) {
+    const docTitle = document.title.split("|")[0].split("-")[0].trim();
+    if (docTitle && !/exxat/i.test(docTitle)) {
+      groupName = cleanName(docTitle);
+    } else {
+      groupName = "GroupPlacement";
+    }
+  }
+
+  groupName = groupName || "Group";
+  groupName = groupName.replace(/[<>:"/\\|?*]+/g, '_').substring(0, 50).trim();
+
+  cachedGroups[displayId] = { displayId, groupName };
+  console.warn(`[Exxat:MANUAL] getGroupPlacementInfo detected: DisplayID=${displayId}, GroupName=${groupName}`);
+  return cachedGroups[displayId];
+}
+
+function detectCategory() {
+  // Strategy 1: Active toolbar items or tabs, excluding candidate list/sidebar
+  const activeElements = document.querySelectorAll(
+    '.e-toolbar-item.e-active button, [role="tab"][aria-selected="true"], .tab.active, [class*="tab" i][class*="active" i], [class*="active" i], .selected'
+  );
+  
+  for (const el of activeElements) {
+    if (el.closest('div.w-60') || el.closest("div[class*='lg:w-[16rem]']") || el.closest('.bg-card')) {
+      continue;
+    }
+    const text = extractCleanText(el);
+    if (text.length > 2 && text.length < 50 && !/close|next|prev|cancel|save|edit|delete|download/i.test(text)) {
+      const cleaned = cleanName(text);
+      console.warn(`[Exxat:MANUAL] detectCategory: Matched active tab element: "${text}" -> "${cleaned}"`);
+      return cleaned;
+    }
+  }
+
+  // Strategy 2: Sidebar categories (if separate from candidate list)
+  const activeSidebarItem = document.querySelector(
+    'div.w-60 [aria-current="true"], div.w-60 [aria-current="page"], div.w-60 .active, div.w-60 .selected, [class*="sidebar" i] [class*="active" i]'
+  );
+  if (activeSidebarItem) {
+    const text = extractCleanText(activeSidebarItem);
+    if (text && text.length < 50 && /requirement|document|schedule/i.test(text)) {
+      const cleaned = cleanName(text);
+      console.warn(`[Exxat:MANUAL] detectCategory: Matched active sidebar category: "${text}" -> "${cleaned}"`);
+      return cleaned;
+    }
+  }
+
+  // Strategy 3: Main page header containing requirement keywords
+  const headers = document.querySelectorAll('h1, h2, h3, h4, h5, .font-bold, .font-semibold');
+  for (const el of headers) {
+    if (el.closest('div.w-60') || el.closest("div[class*='lg:w-[16rem]']") || el.closest('.bg-card')) {
+      continue;
+    }
+    const text = el.textContent.trim();
+    if (text && text.length < 50 && /requirement|instructor|faculty|coordinator|student|school|preceptor/i.test(text)) {
+      const cleaned = cleanName(text);
+      console.warn(`[Exxat:MANUAL] detectCategory: Matched header keyword: "${text}" -> "${cleaned}"`);
+      return cleaned;
+    }
+  }
+
+  // Strategy 4: Fallback based on URL
+  const url = window.location.href.toLowerCase();
+  if (url.includes("student")) return "Student Requirements";
+  if (url.includes("faculty")) return "Faculty Requirements";
+  if (url.includes("school")) return "School Requirements";
+  if (url.includes("coordinator")) return "Coordinator Requirements";
+  if (url.includes("instructor")) return "Clinical Instructors";
+
+  console.warn("[Exxat:MANUAL] detectCategory: Defaulting to General Requirements");
+  return "General Requirements";
+}
+
+function detectCandidateName() {
+  // Strategy 1: Active sidebar candidate item (including Syncfusion .e-active classes)
+  const sidebar = document.querySelector("div.w-60, div[class*='lg:w-[16rem]'], .bg-card, .e-sidebar");
+  if (sidebar) {
+    const listItems = sidebar.querySelectorAll("[role='listitem'], .e-list-item, li");
+    for (const item of listItems) {
+      const hasActiveAttr = item.getAttribute("aria-current") === "true" || item.getAttribute("aria-current") === "page" || item.getAttribute("aria-selected") === "true";
+      const hasActiveClass = item.classList.contains("active") || item.classList.contains("selected") || item.classList.contains("e-active") || item.classList.contains("e-selected");
+      const hasActiveChild = item.querySelector(".active, .selected, .e-active, .e-selected, [aria-current='true'], [aria-current='page'], [aria-selected='true']");
+      
+      const classStr = item.className.toLowerCase();
+      const isStyledActive = classStr.includes("active") || classStr.includes("selected") || classStr.includes("highlight");
+
+      if (hasActiveAttr || hasActiveClass || hasActiveChild || isStyledActive) {
+        const text = extractCleanText(item);
+        if (text) {
+          const cleaned = cleanName(text);
+          if (cleaned && cleaned !== "-" && !/student|faculty|coordinator|school|requirement/i.test(cleaned)) {
+            console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active sidebar item: "${text}" -> "${cleaned}"`);
+            return cleaned;
+          }
+        }
+      }
+    }
+  }
+
+  // Strategy 2: Details pane main header (person's name)
+  const mainPane = document.querySelector("div.flex-1, div[class*='flex-1'], main, #detail-pane, .e-content");
+  if (mainPane) {
+    const headers = mainPane.querySelectorAll('h1, h2, h3, .font-bold, .font-semibold, .e-header-text, .e-title');
+    for (const el of headers) {
+      // Exclude breadcrumbs and specific toolbars
+      if (el.closest('.e-breadcrumb') || el.closest('.e-toolbar')) continue;
+      
+      const text = el.textContent.trim();
+      if (text && text.length < 60 && text.length > 3 &&
+          !/requirements|documents|status|onboarding|history|details|schedule|submission|group|placement|assignments/i.test(text)) {
+        const cleaned = cleanName(text);
+        if (cleaned) {
+          console.warn(`[Exxat:MANUAL] detectCandidateName: Matched detail pane header: "${text}" -> "${cleaned}"`);
+          return cleaned;
+        }
+      }
+    }
+  }
+
+  // Strategy 3: General active item across the whole page
+  const activeItems = document.querySelectorAll("[role='listitem'].active, [role='listitem'].e-active, [role='listitem'][aria-current='true'], [role='listitem'][aria-selected='true'], tr.e-active, tr.e-selected");
+  for (const item of activeItems) {
+    // If it's a table row, try to get the first or second column (usually name)
+    if (item.tagName === 'TR') {
+      const cells = item.querySelectorAll('td');
+      for (const cell of cells) {
+         const text = cell.textContent.trim();
+         if (text && text.length > 2 && text.length < 50 && !text.includes('@')) {
+            const cleaned = cleanName(text);
+            console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active table row cell: "${text}" -> "${cleaned}"`);
+            return cleaned;
+         }
+      }
+    }
+
+    const text = extractCleanText(item);
+    if (text) {
+      const cleaned = cleanName(text);
+      if (cleaned && !/student|faculty|coordinator|school|requirement/i.test(cleaned)) {
+        console.warn(`[Exxat:MANUAL] detectCandidateName: Matched active listitem: "${text}" -> "${cleaned}"`);
+        return cleaned;
+      }
+    }
+  }
+
+  console.warn("[Exxat:MANUAL] detectCandidateName: Defaulting to General Candidates");
+  return "General Candidates";
+}
+
+function updateManualDownloadFolder() {
+  chrome.storage.local.get(["manualDownloadMode"], (res) => {
+    if (!res.manualDownloadMode) return;
+
+    const folder3 = detectCandidateName();
+    const folderPath = `Exxat_Downloads/${folder3}`.replace(/\/+/g, '/');
+    
+    // UI Update - if the menu is open, show the live path
+    const pathEl = document.getElementById("exxat-manual-path");
+    if (pathEl) {
+      pathEl.innerText = folderPath;
+    }
+
+    console.warn(`[Exxat:MANUAL] updateManualDownloadFolder:
+      - Candidate: "${folder3}"
+      - Target Path: "${folderPath}"`);
+
+    // Set variables in storage
+    chrome.storage.local.set({ 
+      manualCandidate: folder3,
+      manualDownloadFolder: folderPath 
+    });
+
+    // Send direct runtime messages to sync background service worker memory synchronously
+    chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: folderPath }).catch(() => {});
+    chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
+  });
+}
+
+// Secret Page UI injection
+function injectPageSecretUI() {
+  if (!document.body) {
+    setTimeout(injectPageSecretUI, 100);
+    return;
+  }
+
+  // Inject everywhere we load so iframes get it too (since the dashboard is complex)
+  if (document.getElementById("exxat-page-secret-dot")) return;
+
+  console.warn(`[Exxat:MANUAL] injectPageSecretUI: Injecting secret page dot menu`);
+
+  // 1. The Red Dot Button
+  const dot = document.createElement("div");
+  dot.id = "exxat-page-secret-dot";
+  dot.title = "Open Exxat Manual Routing Menu";
+  dot.style.position = "fixed";
+  dot.style.bottom = "10px";
+  dot.style.left = "10px";
+  dot.style.width = "16px";
+  dot.style.height = "16px";
+  dot.style.backgroundColor = "#ef4444";
+  dot.style.borderRadius = "50%";
+  dot.style.zIndex = "2147483647"; // max z-index
+  dot.style.cursor = "pointer";
+  dot.style.boxShadow = "0 2px 5px rgba(0,0,0,0.5)";
+  dot.style.transition = "transform 0.2s, background-color 0.2s";
+
+  dot.addEventListener("mouseenter", () => {
+    dot.style.transform = "scale(1.2)";
+    dot.style.backgroundColor = "#dc2626";
+  });
+  
+  dot.addEventListener("mouseleave", () => {
+    dot.style.transform = "scale(1)";
+    dot.style.backgroundColor = "#ef4444";
+  });
+
+  // 2. The Menu Panel (hidden by default)
+  const menu = document.createElement("div");
+  menu.id = "exxat-manual-menu";
+  menu.style.position = "fixed";
+  menu.style.bottom = "35px";
+  menu.style.left = "10px";
+  menu.style.width = "320px";
+  menu.style.backgroundColor = "#1e293b";
+  menu.style.color = "#f8fafc";
+  menu.style.padding = "16px";
+  menu.style.borderRadius = "8px";
+  menu.style.boxShadow = "0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3)";
+  menu.style.zIndex = "2147483647";
+  menu.style.fontFamily = "system-ui, -apple-system, sans-serif";
+  menu.style.fontSize = "13px";
+  menu.style.display = "none";
+  menu.style.border = "1px solid #334155";
+  menu.innerHTML = `
+    <div style="font-weight: 600; margin-bottom: 12px; font-size: 15px; border-bottom: 1px solid #334155; padding-bottom: 8px; color: #f1f5f9; display: flex; justify-content: space-between; align-items: center;">
+      <span>Exxat Routing Tools</span>
+      <span id="exxat-menu-close" style="cursor: pointer; color: #94a3b8; padding: 0 4px;">✕</span>
+    </div>
+    
+    <div style="margin-bottom: 16px;">
+      <label style="display: flex; align-items: center; cursor: pointer; gap: 8px;">
+        <input type="checkbox" id="exxat-manual-toggle" style="width: 16px; height: 16px; cursor: pointer;">
+        <span style="font-weight: 500;">Enable Manual Download Routing</span>
+      </label>
+    </div>
+    
+    <div style="background: #0f172a; padding: 12px; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; border: 1px solid #1e293b;">
+      <div style="color: #94a3b8; margin-bottom: 6px; font-weight: 500; display: flex; justify-content: space-between;">
+        <span>Current Target Path:</span>
+        <span id="exxat-status-indicator" style="color: #ef4444;">● OFF</span>
+      </div>
+      <div id="exxat-manual-path" style="color: #4ade80; word-break: break-all; min-height: 14px;">-</div>
+    </div>
+    
+    <div style="margin-top: 12px; font-size: 11px; color: #64748b; line-height: 1.4;">
+      The target path updates automatically as you click around the student dashboard.
+    </div>
+  `;
+
+  document.body.appendChild(dot);
+  document.body.appendChild(menu);
+
+  const toggleCheckbox = document.getElementById("exxat-manual-toggle");
+  const closeBtn = document.getElementById("exxat-menu-close");
+  const statusIndicator = document.getElementById("exxat-status-indicator");
+
+  // Toggle Menu Open/Close
+  dot.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === "none" ? "block" : "none";
+  });
+
+  closeBtn.addEventListener("click", () => {
+    menu.style.display = "none";
+  });
+
+  // Initialize state from storage
+  chrome.storage.local.get(["manualDownloadMode"], (res) => {
+    toggleCheckbox.checked = !!res.manualDownloadMode;
+    if (toggleCheckbox.checked) {
+      statusIndicator.style.color = "#4ade80";
+      statusIndicator.innerText = "● ON";
+      updateManualDownloadFolder();
+    }
+  });
+
+  // Handle Toggle Checkbox change
+  toggleCheckbox.addEventListener("change", (e) => {
+    const newVal = e.target.checked;
+    console.warn(`[Exxat:MANUAL] Toggle changed to: ${newVal}`);
+    
+    if (newVal) {
+      statusIndicator.style.color = "#4ade80";
+      statusIndicator.innerText = "● ON";
+      chrome.storage.local.set({ manualDownloadMode: true }, () => {
+        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
+        updateManualDownloadFolder();
+      });
+    } else {
+      statusIndicator.style.color = "#ef4444";
+      statusIndicator.innerText = "● OFF";
+      document.getElementById("exxat-manual-path").innerText = "-";
+      chrome.storage.local.set({ manualDownloadMode: false }, () => {
+        chrome.storage.local.remove(["manualDownloadFolder", "manualCandidate"]);
+        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: false }).catch(() => {});
+        chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: null }).catch(() => {});
+      });
+    }
+  });
+}
+
+// Watch storage changes to sync immediately (in case another tab/iframe toggles it)
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === "local" && "manualDownloadMode" in changes) {
+    const isModeActive = !!changes.manualDownloadMode.newValue;
+    console.warn("[Exxat:MANUAL] Storage onChanged detected manualDownloadMode:", isModeActive);
+    
+    const toggleCheckbox = document.getElementById("exxat-manual-toggle");
+    const statusIndicator = document.getElementById("exxat-status-indicator");
+    
+    if (toggleCheckbox) {
+      toggleCheckbox.checked = isModeActive;
+      if (isModeActive) {
+        statusIndicator.style.color = "#4ade80";
+        statusIndicator.innerText = "● ON";
+      } else {
+        statusIndicator.style.color = "#ef4444";
+        statusIndicator.innerText = "● OFF";
+        const pathEl = document.getElementById("exxat-manual-path");
+        if (pathEl) pathEl.innerText = "-";
+      }
+    }
+    
+    chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: isModeActive }).catch(() => {});
+    
+    if (isModeActive) {
+      updateManualDownloadFolder();
+    } else {
+      chrome.storage.local.remove(["manualDownloadFolder", "manualCandidate"]);
+      chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_FOLDER", folder: null }).catch(() => {});
+    }
+  }
+});
+
+// Register click and mousedown listeners to immediately capture context on user actions
+document.addEventListener("click", () => {
+  chrome.storage.local.get(["manualDownloadMode"], (res) => {
+    if (res.manualDownloadMode) {
+      updateManualDownloadFolder();
+    }
+  });
+});
+
+document.addEventListener("mousedown", () => {
+  chrome.storage.local.get(["manualDownloadMode"], (res) => {
+    if (res.manualDownloadMode) {
+      updateManualDownloadFolder();
+    }
+  });
+});
+
+// Periodic update check every 1 second
+setInterval(() => {
+  chrome.storage.local.get(["manualDownloadMode"], (res) => {
+    if (res.manualDownloadMode) {
+      updateManualDownloadFolder();
+    }
+  });
+}, 1000);
+
+// Initialize UI
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", injectPageSecretUI);
+} else {
+  injectPageSecretUI();
+}
+

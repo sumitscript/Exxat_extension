@@ -44,6 +44,18 @@ let activeTabId = null;
  */
 let currentDownloadFolder = null;
 
+/**
+ * The current subfolder path for manual downloads.
+ * @type {string | null}
+ */
+let manualDownloadFolder = null;
+
+/**
+ * Whether manual download routing is enabled.
+ * @type {boolean}
+ */
+let manualDownloadMode = false;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -179,6 +191,13 @@ function clearStorage() {
     console.error("[background] Failed to load persisted steps:", err);
     state.storageError = "Failed to load saved steps: " + err.message;
   }
+
+  // Load manual download settings
+  chrome.storage.local.get(["manualDownloadMode", "manualDownloadFolder"], (res) => {
+    manualDownloadMode = !!res.manualDownloadMode;
+    manualDownloadFolder = res.manualDownloadFolder || null;
+    console.log("[Exxat:BG] Initialized manual mode:", manualDownloadMode, "folder:", manualDownloadFolder);
+  });
 })();
 
 // ---------------------------------------------------------------------------
@@ -440,6 +459,20 @@ async function handleMessage(message, sender) {
       return { ok: true };
     }
 
+    case "SET_MANUAL_DOWNLOAD_FOLDER": {
+      manualDownloadFolder = message.folder;
+      chrome.storage.local.set({ manualDownloadFolder: message.folder });
+      console.log("[Exxat:BG] SET_MANUAL_DOWNLOAD_FOLDER received:", message.folder);
+      return { ok: true };
+    }
+
+    case "SET_MANUAL_DOWNLOAD_MODE": {
+      manualDownloadMode = message.active;
+      chrome.storage.local.set({ manualDownloadMode: message.active });
+      console.log("[Exxat:BG] SET_MANUAL_DOWNLOAD_MODE received:", message.active);
+      return { ok: true };
+    }
+
     case "SESSION_INTERRUPTED": {
       // Tab closed, navigated away, or started from wrong page (Requirement 6.4)
       state.mode = "IDLE";
@@ -500,20 +533,69 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
 // student detail page). We only interrupt if the tab is closed entirely,
 // which is handled by chrome.tabs.onRemoved above.
 
-// ---------------------------------------------------------------------------
-// Downloads Interceptor (Subfolders)
-// ---------------------------------------------------------------------------
-
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  // Use async lookup to survive Service Worker restarts
-  chrome.storage.local.get(["extensionMode", "currentDownloadFolder"], (res) => {
-    if (res.extensionMode === "REPLAYING" && res.currentDownloadFolder) {
-      // Clean filename of any weird characters
-      const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
-      suggest({ filename: `${res.currentDownloadFolder}/${safeFilename}` });
+  console.warn(`[Exxat:BG] onDeterminingFilename triggered for: "${item.filename}"`);
+
+  chrome.storage.local.get(["manualDownloadMode", "manualDownloadFolder", "extensionMode", "currentDownloadFolder"], (res) => {
+    const isManualActive = manualDownloadMode || !!res.manualDownloadMode;
+    const isReplayActive = (state.mode === "REPLAYING" || res.extensionMode === "REPLAYING");
+
+    if (isManualActive) {
+      // Query active tab dynamically
+      getActiveTab().then((tab) => {
+        if (!tab || !tab.id) {
+          console.warn("[Exxat:BG] No active tab found for manual routing. Falling back.");
+          const folder = res.manualDownloadFolder || manualDownloadFolder;
+          if (folder) {
+            const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+            const routedPath = `${folder}/${safeFilename}`.replace(/\/+/g, '/');
+            console.warn(`[Exxat:BG] Routed manual download via storage fallback: "${routedPath}"`);
+            suggest({ filename: routedPath });
+          } else {
+            suggest({ filename: item.filename });
+          }
+          return;
+        }
+
+        console.warn(`[Exxat:BG] Sending GET_CURRENT_MANUAL_PATH to tab ${tab.id}`);
+        chrome.tabs.sendMessage(tab.id, { action: "GET_CURRENT_MANUAL_PATH" }, (response) => {
+          if (chrome.runtime.lastError || !response || !response.folderPath) {
+            console.warn("[Exxat:BG] Failed to get manual path from tab, using storage fallback.");
+            const folder = res.manualDownloadFolder || manualDownloadFolder;
+            if (folder) {
+              const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+              const routedPath = `${folder}/${safeFilename}`.replace(/\/+/g, '/');
+              suggest({ filename: routedPath });
+            } else {
+              suggest({ filename: item.filename });
+            }
+          } else {
+            const folderPath = response.folderPath;
+            const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+            const routedPath = `${folderPath}/${safeFilename}`.replace(/\/+/g, '/');
+            console.warn(`[Exxat:BG] Dynamic manual route succeeded: "${routedPath}"`);
+            suggest({ filename: routedPath });
+          }
+        });
+      }).catch((err) => {
+        console.error("[Exxat:BG] Error in getActiveTab:", err);
+        suggest({ filename: item.filename });
+      });
+    } else if (isReplayActive) {
+      const folder = currentDownloadFolder || res.currentDownloadFolder;
+      if (folder) {
+        const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+        const routedPath = `${folder}/${safeFilename}`.replace(/\/+/g, '/');
+        console.warn(`[Exxat:BG] Routing replay download to: "${routedPath}"`);
+        suggest({ filename: routedPath });
+      } else {
+        suggest({ filename: item.filename });
+      }
     } else {
+      console.warn(`[Exxat:BG] No routing active. Saving to default folder.`);
       suggest({ filename: item.filename });
     }
   });
-  return true; // Indicates asynchronous suggestion
+
+  return true; // Asynchronous suggestion
 });
