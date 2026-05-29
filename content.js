@@ -1769,11 +1769,9 @@ async function updateManualDownloadFolder(clickedElement = null) {
       lastDetectedCandidate = domCandidate;
     }
     
-    if (clickedElement) {
-       const req = detectRequirementName(clickedElement);
-       if (req !== "General Requirement") {
-          lastDetectedRequirement = req;
-       }
+    const domRequirement = detectActiveRequirementNameFromDOM(clickedElement);
+    if (domRequirement && domRequirement !== "General Requirement") {
+      lastDetectedRequirement = domRequirement;
     }
     
     const safeCandidate = lastDetectedCandidate && lastDetectedCandidate !== "General Candidates" ? lastDetectedCandidate : "General Candidates";
@@ -1878,10 +1876,62 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 document.addEventListener("click", (e) => updateManualDownloadFolder(e.target));
 document.addEventListener("mousedown", (e) => updateManualDownloadFolder(e.target));
 
-setInterval(() => {
-  chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    if (res.manualDownloadMode) updateManualDownloadFolder();
-  });
+function detectActiveRequirementNameFromDOM(clickedElement = null) {
+  // If we clicked directly on something that looks like a requirement, try to parse it
+  if (clickedElement) {
+    const row = clickedElement.closest('.bg-white, tr, .group\\/item, li');
+    if (row) {
+      const textEl = row.querySelector('.font-semibold, .font-medium, h3, h4, .text-gray-900');
+      if (textEl && textEl.textContent) {
+        let text = cleanName(textEl.textContent).replace(/\*$/, '').trim();
+        if (text && text.length < 60 && !text.toLowerCase().includes("select")) {
+          return text;
+        }
+      }
+    }
+  }
+
+  // Fallback 1: Look for an actively selected row in the UI (like a selected requirement)
+  const selectedRows = document.querySelectorAll('.bg-primary-50, [aria-selected="true"], [aria-current="true"], .e-active, .active');
+  for (const row of selectedRows) {
+    if (row.getAttribute('aria-label') && row.getAttribute('aria-label').toLowerCase().includes('select')) continue;
+    
+    const textEl = row.querySelector('.font-semibold, .font-medium, h3, h4');
+    if (textEl && textEl.textContent) {
+      let text = cleanName(textEl.textContent).replace(/\*$/, '').trim();
+      if (text && text.length < 60) return text;
+    }
+  }
+
+  // Fallback 2: Look for an open requirement details pane header
+  const headers = document.querySelectorAll('h2.font-semibold, h3.font-semibold');
+  for (const header of headers) {
+    if (header.closest('div.w-60') || header.closest("div[class*='lg:w-[16rem]']")) continue;
+    let text = cleanName(header.textContent).replace(/\*$/, '').trim();
+    if (text && text.length < 60 && text !== "General Requirements" && text !== "Onboarding Requirements") {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+let modeInterval = setInterval(() => {
+  if (!chrome || !chrome.runtime || !chrome.runtime.id) {
+    clearInterval(modeInterval);
+    return;
+  }
+  try {
+    chrome.storage.local.get(["manualDownloadMode"], (res) => {
+      if (chrome.runtime.lastError) {
+        clearInterval(modeInterval);
+        return;
+      }
+      if (res && res.manualDownloadMode) updateManualDownloadFolder();
+    });
+  } catch (e) {
+    clearInterval(modeInterval);
+  }
 }, 1000);
 
 if (document.readyState === "loading") {
