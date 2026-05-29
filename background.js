@@ -48,13 +48,19 @@ let currentDownloadFolder = null;
  * The current subfolder path for manual downloads.
  * @type {string | null}
  */
-let manualDownloadFolder = null;
+let manualDownloadFolder = "Exxat_Downloads/General Group/General Candidates";
 
 /**
  * Whether manual download routing is enabled.
  * @type {boolean}
  */
 let manualDownloadMode = false;
+
+/**
+ * Queue to hold folders for pending manual downloads triggered by clicks.
+ * @type {Array<{folder: string, time: number}>}
+ */
+let pendingDownloadsQueue = [];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -459,6 +465,17 @@ async function handleMessage(message, sender) {
       return { ok: true };
     }
 
+    case "ENQUEUE_DOWNLOAD_FOLDER": {
+      console.log("[Exxat:BG] Enqueuing download for folder:", message.folder);
+      pendingDownloadsQueue.push({
+        folder: message.folder,
+        time: Date.now()
+      });
+      // Prune old items (>15s)
+      pendingDownloadsQueue = pendingDownloadsQueue.filter(item => Date.now() - item.time < 15000);
+      return { ok: true };
+    }
+
     case "SET_MANUAL_DOWNLOAD_FOLDER": {
       manualDownloadFolder = message.folder;
       chrome.storage.local.set({ manualDownloadFolder: message.folder });
@@ -541,7 +558,24 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     const isReplayActive = (state.mode === "REPLAYING" || res.extensionMode === "REPLAYING");
 
     if (isManualActive) {
-      // Query active tab dynamically
+      // Prune old items
+      pendingDownloadsQueue = pendingDownloadsQueue.filter(item => Date.now() - item.time < 15000);
+      
+      let targetFolder = null;
+      if (pendingDownloadsQueue.length > 0) {
+        const queuedItem = pendingDownloadsQueue.shift();
+        targetFolder = queuedItem.folder;
+        console.warn(`[Exxat:BG] Found queued download folder: "${targetFolder}"`);
+      }
+      
+      if (targetFolder) {
+        const safeFilename = item.filename.replace(/[<>:"/\\|?*]+/g, '_');
+        const routedPath = `${targetFolder}/${safeFilename}`.replace(/\/+/g, '/');
+        suggest({ filename: routedPath });
+        return;
+      }
+
+      // Query active tab dynamically as fallback
       getActiveTab().then((tab) => {
         if (!tab || !tab.id) {
           console.warn("[Exxat:BG] No active tab found for manual routing. Falling back.");

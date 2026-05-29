@@ -1743,6 +1743,7 @@ function detectCandidateNameFromDOM() {
 
 document.addEventListener('click', (e) => {
   if (window.top !== window.self) return;
+  
   const candidateRow = e.target.closest('div[aria-label^="Select student"], div[aria-label^="Select faculty"], div[aria-label^="Select "]');
   if (candidateRow) {
     const link = candidateRow.querySelector('a.link-text');
@@ -1752,6 +1753,39 @@ document.addEventListener('click', (e) => {
       const aria = candidateRow.getAttribute('aria-label');
       if (aria) {
         lastDetectedCandidate = cleanName(aria.replace(/Select (student|faculty) /i, ''));
+      }
+    }
+  }
+
+  const btn = e.target.closest('button, a, [role="button"], [class*="download" i]');
+  if (btn) {
+    const text = btn.innerText ? btn.innerText.toLowerCase() : '';
+    const aria = btn.getAttribute('aria-label') ? btn.getAttribute('aria-label').toLowerCase() : '';
+    const title = btn.getAttribute('title') ? btn.getAttribute('title').toLowerCase() : '';
+    const href = btn.getAttribute('href') ? btn.getAttribute('href').toLowerCase() : '';
+    const html = btn.innerHTML.toLowerCase();
+    const className = btn.className && typeof btn.className === 'string' ? btn.className.toLowerCase() : '';
+    
+    const isDownload = text.includes('download') || 
+                       aria.includes('download') || 
+                       title.includes('download') || 
+                       (btn.tagName && btn.tagName.toLowerCase() === 'a' && btn.hasAttribute('download')) ||
+                       html.includes('download') ||
+                       className.includes('download');
+                       
+    if (isDownload) {
+      try {
+        if (!chrome || !chrome.runtime || !chrome.runtime.id) return;
+        chrome.storage.local.get(["manualDownloadMode", "manualDownloadFolder"], (res) => {
+          if (res && res.manualDownloadMode && res.manualDownloadFolder) {
+            chrome.runtime.sendMessage({ 
+              action: "ENQUEUE_DOWNLOAD_FOLDER", 
+              folder: res.manualDownloadFolder 
+            }).catch(() => {});
+          }
+        });
+      } catch (err) {
+        // Ignore context errors
       }
     }
   }
