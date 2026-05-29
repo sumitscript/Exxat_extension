@@ -1757,8 +1757,11 @@ document.addEventListener('click', (e) => {
 }, true);
 
 async function updateManualDownloadFolder(clickedElement = null) {
-  chrome.storage.local.get(["manualDownloadMode"], (res) => {
-    if (!res.manualDownloadMode) return;
+  if (!chrome || !chrome.runtime || !chrome.runtime.id) return;
+  try {
+    chrome.storage.local.get(["manualDownloadMode"], (res) => {
+      if (chrome.runtime.lastError) return;
+      if (!res || !res.manualDownloadMode) return;
     
     lastDetectedGroup = detectGroupName();
     
@@ -1787,7 +1790,10 @@ async function updateManualDownloadFolder(clickedElement = null) {
     chrome.runtime.sendMessage({ action: "SET_MANUAL_DOWNLOAD_MODE", active: true }).catch(() => {});
     
     updateSecretUI(safeGroup, safeCandidate, folderPath);
-  });
+    });
+  } catch (e) {
+    // Ignore context invalidation errors
+  }
 }
 
 function updateSecretUI(group, candidate, targetPath) {
