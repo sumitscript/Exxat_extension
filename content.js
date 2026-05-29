@@ -1677,6 +1677,9 @@ function detectCategory() {
     }
   }
 
+  console.warn("[Exxat:MANUAL] detectCategory: Defaulting to General Requirements");
+  return "General Requirements";
+}
 
 let lastDetectedCandidate = "General Candidates";
 let lastDetectedGroup = "General Group";
