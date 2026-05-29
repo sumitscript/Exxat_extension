@@ -9,9 +9,15 @@ console.warn("[Exxat Popup] popup.js loaded successfully.");
 // ---------------------------------------------------------------------------
 
 const modeBadge          = document.getElementById("mode-badge");
+const versionSpan        = document.getElementById("app-version");
 const stepCountEl        = document.getElementById("step-count");
 const interruptionWarn   = document.getElementById("interruption-warning");
 const storageErrorEl     = document.getElementById("storage-error");
+
+if (versionSpan) {
+  const manifest = chrome.runtime.getManifest();
+  versionSpan.textContent = `v${manifest.version}`;
+}
 
 const btnStartRecord     = document.getElementById("btn-start-record");
 const btnStopRecord      = document.getElementById("btn-stop-record");
@@ -405,7 +411,7 @@ const secretDot          = document.getElementById("secret-dot");
 const manualPanel        = document.getElementById("manual-download-panel");
 const chkManualDownload  = document.getElementById("chk-manual-download");
 const manualGroupVal     = document.getElementById("manual-group-val");
-const manualCategoryVal  = document.getElementById("manual-category-val");
+const manualRequirementVal = document.getElementById("manual-requirement-val");
 const manualCandidateVal = document.getElementById("manual-candidate-val");
 const manualPathVal      = document.getElementById("manual-path-val");
 
@@ -423,7 +429,7 @@ chkManualDownload.addEventListener("change", () => {
       chrome.storage.local.remove([
         "manualDownloadFolder",
         "manualGroup",
-        "manualCategory",
+        "manualRequirement",
         "manualCandidate"
       ]);
     }
@@ -435,7 +441,7 @@ function syncManualModeData() {
   chrome.storage.local.get([
     "manualDownloadMode",
     "manualGroup",
-    "manualCategory",
+    "manualRequirement",
     "manualCandidate",
     "manualDownloadFolder"
   ], (res) => {
@@ -444,9 +450,9 @@ function syncManualModeData() {
     // Only update text values if panel is visible to save cycles
     if (manualPanel.style.display !== "none") {
       manualGroupVal.textContent = res.manualGroup || "-";
-      manualCategoryVal.textContent = res.manualCategory || "-";
-      manualCandidateVal.textContent = res.manualCandidate || "-";
-      manualPathVal.textContent = res.manualDownloadFolder || "-";
+      manualRequirementVal.textContent = res.manualRequirement || "-";
+      manualCandidateVal.textContent = res.manualCandidate || "General Candidates";
+      manualPathVal.textContent = res.manualDownloadFolder || "Exxat_Downloads/General Group/General Requirement/General Candidates";
     }
   });
 }

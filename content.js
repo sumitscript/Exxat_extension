@@ -1787,6 +1787,8 @@ async function updateManualDownloadFolder(clickedElement = null) {
     }
 
     chrome.storage.local.set({ 
+      manualGroup: safeGroup,
+      manualRequirement: lastDetectedRequirement,
       manualCandidate: safeCandidate,
       manualDownloadFolder: folderPath 
     });
